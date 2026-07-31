@@ -1,0 +1,84 @@
+# ==========================================
+# 1. Секреты и конфигурация (КРИТИЧНО)
+# ==========================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ==========================================
+# 2. Python / FastAPI / Backend
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.python-version
+
+# Виртуальные окружения
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# Инструменты тестирования и линтеры
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ==========================================
+# 3. Node.js / React / Vite / Frontend
+# ==========================================
+node_modules/
+frontend/node_modules/
+
+# Сборка и кэши
+dist/
+dist-ssr/
+frontend/dist/
+.vite/
+frontend/.vite/
+*.local
+
+# Логи и кэш пакетов
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm/
+
+# ==========================================
+# 4. Среда разработки (IDE) и AI-инструменты
+# ==========================================
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+
+# AI / Cursor / Windsurf снимки и кэши
+.cursor/
+.windsurf/
+*.log
+
+# ==========================================
+# 5. Операционная система (Windows / macOS)
+# ==========================================
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+.DS_Store
+.AppleDouble
+.LSOverride
