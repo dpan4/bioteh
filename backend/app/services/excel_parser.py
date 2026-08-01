@@ -3,7 +3,8 @@
 Модуль отвечает ТОЛЬКО за преобразование данных:
 - parse_excel(): байты .xlsx -> list[RawTask] (БЕЗ дат — даты вычисляет
   исключительно backend/app/services/scheduler.py, system.md, инвариант 1);
-- generate_excel(): list[GanttTask] -> байты .xlsx с готовым расписанием.
+- generate_excel(): list[GanttTask] -> байты .xlsx с готовым расписанием (8 колонок);
+- generate_template_excel(): -> байты .xlsx с эталонным шаблоном для заполнения (5 колонок).
 
 Формат входного файла — строго 5 колонок (регистр и пробелы игнорируются):
   Задача / Title / Название
@@ -15,9 +16,13 @@
 ID генерируется автоматически: task-1, task-2, ... по порядку строк.
 Предшественники: числовые номера (1, 2 -> task-1, task-2) или строковые ID.
 
-Формат выходного файла — 8 колонок:
+Формат выходного файла экспорта — 8 колонок:
   ID | Задача | Описание | Исполнитель | Длительность | Дата начала | Дата окончания | Предшественники
 Дата окончания — живая формула Excel (= Дата начала + Длительность).
+
+Формат шаблона для заполнения — строго 5 колонок:
+  Задача | Описание | Исполнитель | Длительность (дни) | Предшественники
+БЕЗ колонок ID и дат (даты рассчитает бэкенд при импорте).
 """
 
 import io
@@ -355,6 +360,121 @@ def generate_excel(tasks: list[GanttTask]) -> bytes:
 
         pred_text = ", ".join(task.predecessors)
         worksheet.cell(row=row_index, column=8, value=pred_text)
+
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+# ── Генератор эталонного шаблона ─────────────────────────────────────────────
+
+
+def generate_template_excel() -> bytes:
+    """Формирует эталонный шаблон .xlsx для заполнения проекта (5 колонок).
+
+    Шаблон содержит:
+    - Строго 5 колонок: Задача, Описание, Исполнитель, Длительность (дни), Предшественники.
+    - БЕЗ колонок ID, Дата начала, Дата окончания (даты рассчитает бэкенд при импорте).
+    - 5 наглядных демо-строк с реалистичными данными.
+    - Предшественники — простые номера строк (1, 2, 3, 4), НЕ task-N.
+    - Стилизованную шапку (темно-синяя заливка, белый жирный текст).
+    - Автоматическую подгонку ширины колонок.
+
+    Этот файл предназначен для скачивания пользователями через кнопку
+    «Скачать шаблон» или MCP-инструмент get_excel_template.
+
+    Returns:
+        Содержимое Excel-файла в виде байтов.
+    """
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Шаблон проекта"
+
+    # ── Определение колонок шаблона (5 колонок, БЕЗ ID и дат) ────────────────
+    template_columns: list[tuple[str, int]] = [
+        ("Задача", 35),
+        ("Описание", 50),
+        ("Исполнитель", 20),
+        ("Длительность (дни)", 20),
+        ("Предшественники", 20),
+    ]
+
+    # ── Стилизация шапки ──────────────────────────────────────────────────────
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(
+        start_color="1F4E78", end_color="1F4E78", fill_type="solid"
+    )
+
+    for column_index, (header, width) in enumerate(template_columns, start=1):
+        cell = worksheet.cell(row=1, column=column_index, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        worksheet.column_dimensions[get_column_letter(column_index)].width = width
+
+    worksheet.freeze_panes = "A2"
+
+    # ── Демо-данные (5 строк, демонстрирующие параллельность и слияние) ──────
+    # Граф зависимостей (наглядный пример для пользователей):
+    #
+    #   A[1: Анализ требований, 5 дней] ──────────┐
+    #   (старт День 1, без предшественников)      │
+    #                                              ▼
+    #   B[2: Исследование конкурентов, 3 дня]  C[3: Проектирование БД, 4 дня]
+    #   (старт День 1, ПАРАЛЛЕЛЬНО с A!)       (после A → старт День 6)
+    #          │                                   │
+    #          ▼                                   │
+    #   D[4: UI-макеты, 4 дня]  ◄─────────────────┘
+    #   (после B → старт День 4, ПАРАЛЛЕЛЬНО с C!)
+    #          │                                   │
+    #          └────────────────┬──────────────────┘
+    #                           ▼
+    #            E[5: Интеграционное тестирование, 3 дня]
+    #            (после max(C, D) → старт День 10)
+    #
+    demo_tasks = [
+        {
+            "title": "Анализ требований",
+            "description": "Сбор бизнес-требований (корневая задача, старт в День 1)",
+            "assignee": "Анна",
+            "duration": 5,
+            "predecessors": "",
+        },
+        {
+            "title": "Исследование конкурентов",
+            "description": "Анализ аналогов (идет параллельно со строкой 1!)",
+            "assignee": "Игорь",
+            "duration": 3,
+            "predecessors": "",
+        },
+        {
+            "title": "Проектирование БД",
+            "description": "Схема PostgreSQL (строго после Анализа)",
+            "assignee": "Дмитрий",
+            "duration": 4,
+            "predecessors": "1",
+        },
+        {
+            "title": "Разработка UI-макетов",
+            "description": "Дизайн интерфейса (после Исследования, параллельно с БД!)",
+            "assignee": "Елена",
+            "duration": 4,
+            "predecessors": "2",
+        },
+        {
+            "title": "Интеграционное тестирование",
+            "description": "Проверка API и UI (ждёт завершения И БД, И макетов)",
+            "assignee": "Анна",
+            "duration": 3,
+            "predecessors": "3, 4",
+        },
+    ]
+
+    for row_index, task in enumerate(demo_tasks, start=2):
+        worksheet.cell(row=row_index, column=1, value=task["title"])
+        worksheet.cell(row=row_index, column=2, value=task["description"])
+        worksheet.cell(row=row_index, column=3, value=task["assignee"])
+        worksheet.cell(row=row_index, column=4, value=task["duration"])
+        worksheet.cell(row=row_index, column=5, value=task["predecessors"])
 
     buffer = io.BytesIO()
     workbook.save(buffer)

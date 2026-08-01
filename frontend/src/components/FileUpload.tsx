@@ -1,5 +1,5 @@
 import { useRef, useState, type ChangeEvent, type FC } from "react";
-import { uploadExcel, exportExcel } from "../api/client";
+import { uploadExcel, exportExcel, downloadTemplate } from "../api/client";
 import type { GanttTask } from "../schemas/task";
 
 interface FileUploadProps {
@@ -64,6 +64,7 @@ const styles = {
 export const FileUpload: FC<FileUploadProps> = ({ onTasksUpdate, onError }) => {
   const [uploading, setUploading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -99,6 +100,17 @@ export const FileUpload: FC<FileUploadProps> = ({ onTasksUpdate, onError }) => {
     }
   };
 
+  const handleDownloadTemplate = async () => {
+    setDownloadingTemplate(true);
+    try {
+      await downloadTemplate();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Ошибка скачивания шаблона");
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  };
+
   return (
     <div style={styles.panel}>
       <button
@@ -125,9 +137,26 @@ export const FileUpload: FC<FileUploadProps> = ({ onTasksUpdate, onError }) => {
       />
       <button
         style={styles.btn}
+        onClick={handleDownloadTemplate}
+        disabled={downloadingTemplate}
+        type="button"
+        title="Скачать эталонный шаблон (5 колонок БЕЗ дат) для заполнения проекта"
+      >
+        {downloadingTemplate ? (
+          <>
+            <span className="spinner" />
+            Загрузка...
+          </>
+        ) : (
+          "Скачать шаблон"
+        )}
+      </button>
+      <button
+        style={styles.btn}
         onClick={handleExport}
         disabled={exporting}
         type="button"
+        title="Скачать текущее расписание (8 колонок с датами и формулами)"
       >
         {exporting ? (
           <>
@@ -135,7 +164,7 @@ export const FileUpload: FC<FileUploadProps> = ({ onTasksUpdate, onError }) => {
             Экспорт...
           </>
         ) : (
-          "Скачать Excel"
+          "Экспорт проекта"
         )}
       </button>
       <span style={styles.infoText}>.xlsx</span>

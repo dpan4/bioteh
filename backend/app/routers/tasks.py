@@ -3,7 +3,8 @@
 Эндпоинты:
   GET  /api/tasks          — список задач с датами (seed при пустом хранилище).
   POST /api/tasks/upload    — загрузка Excel-файла, замена состояния.
-  GET  /api/tasks/export    — скачать заполненный .xlsx с расписанием.
+  GET  /api/tasks/export    — скачать заполненный .xlsx с расписанием (8 колонок).
+  GET  /api/tasks/template  — скачать эталонный шаблон для заполнения (5 колонок).
 
 Все ответы используют camelCase через Pydantic alias_generator=to_camel
 (architecture.md, раздел 2.3). Ошибки валидации и бизнес-логики оборачиваются
@@ -13,7 +14,11 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from app.services.excel_parser import generate_excel, parse_excel
+from app.services.excel_parser import (
+    generate_excel,
+    generate_template_excel,
+    parse_excel,
+)
 from app.services.scheduler import CyclicDependencyError
 from app.services.task_store import store
 
@@ -40,7 +45,7 @@ def get_tasks() -> list[dict[str, object]]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return [task.model_dump(by_alias=True) for task in tasks]
+    return [task.model_dump(by_alias=True, mode='json') for task in tasks]
 
 
 @router.post("/upload")
@@ -85,15 +90,15 @@ async def upload_tasks(file: UploadFile = File(...)) -> list[dict[str, object]]:
     except (CyclicDependencyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return [task.model_dump(by_alias=True) for task in gantt_tasks]
+    return [task.model_dump(by_alias=True, mode='json') for task in gantt_tasks]
 
 
 @router.get("/export")
 def export_tasks() -> Response:
-    """Формирует Excel-файл (.xlsx) с текущим расписанием проекта.
+    """Формирует Excel-файл (.xlsx) с текущим расписанием проекта (8 колонок).
 
-    Содержимое: столбцы Задача, Описание, Исполнитель, Длительность (дни),
-    Дата начала, Дата окончания, Предшественники.
+    Содержимое: столбцы ID, Задача, Описание, Исполнитель, Длительность (дни),
+    Дата начала, Дата окончания, Предшественники (с датами и формулами).
 
     Returns:
         Response с медиатипом xlsx и заголовком Content-Disposition,
@@ -119,5 +124,37 @@ def export_tasks() -> Response:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": "attachment; filename=gantt_plan.xlsx"
+        },
+    )
+
+
+@router.get("/template")
+def get_template() -> Response:
+    """Формирует эталонный Excel-шаблон для заполнения проекта (5 колонок).
+
+    Содержимое: Задача, Описание, Исполнитель, Длительность (дни), Предшественники.
+    БЕЗ колонок ID, Дата начала, Дата окончания (даты рассчитает бэкенд при импорте).
+
+    Шаблон содержит 5 демо-строк с наглядными примерами заполнения:
+    - Предшественники указываются как номера строк (1, 2, 3, 4), а не task-N.
+    - Пользователь может очистить демо-строки и заполнить свои задачи.
+
+    Returns:
+        Response с медиатипом xlsx и заголовком Content-Disposition,
+        предлагающим браузеру скачать файл как gantt_template.xlsx.
+    """
+    try:
+        template_bytes = generate_template_excel()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось сформировать шаблон Excel: {exc}",
+        ) from exc
+
+    return Response(
+        content=template_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": "attachment; filename=gantt_template.xlsx"
         },
     )

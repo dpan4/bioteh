@@ -82,3 +82,5 @@ $RECYCLE.BIN/
 .DS_Store
 .AppleDouble
 .LSOverride
+.kilo/
+tz.md

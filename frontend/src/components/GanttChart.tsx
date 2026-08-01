@@ -1,5 +1,6 @@
-import { type FC } from "react";
+import { type FC, useState } from "react";
 import type { GanttTask } from "../schemas/task";
+import { TaskDetailModal } from "./TaskDetailModal";
 
 interface GanttChartProps {
   tasks: GanttTask[];
@@ -65,6 +66,8 @@ function formatDateFull(iso: string): string {
 }
 
 export const GanttChart: FC<GanttChartProps> = ({ tasks, loading }) => {
+  const [selectedTask, setSelectedTask] = useState<GanttTask | null>(null);
+
   if (loading) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 300, color: "#8a8aaa", fontSize: 15 }}>
@@ -186,7 +189,17 @@ export const GanttChart: FC<GanttChartProps> = ({ tasks, loading }) => {
                   flexDirection: "column",
                   justifyContent: "center",
                   gap: 2,
+                  cursor: "pointer",
+                  transition: "background 0.15s",
                 }}
+                onClick={() => setSelectedTask(task)}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#252540";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+                title="Нажмите, чтобы открыть детали задачи"
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 10, color: color, fontWeight: 700 }}>{task.id}</span>
@@ -237,11 +250,19 @@ export const GanttChart: FC<GanttChartProps> = ({ tasks, loading }) => {
                     overflow: "hidden",
                     whiteSpace: "nowrap",
                     textOverflow: "ellipsis",
-                    cursor: "default",
+                    cursor: "pointer",
                     minWidth: 2,
                     zIndex: 1,
+                    transition: "filter 0.15s",
                   }}
-                  title={`${task.title}: ${formatDateFull(task.startDate)} → ${formatDateFull(task.endDate)} (${task.durationDays} дн.)`}
+                  onClick={() => setSelectedTask(task)}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.filter = "brightness(1.2)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.filter = "brightness(1)";
+                  }}
+                  title={`${task.title}: ${formatDateFull(task.startDate)} → ${formatDateFull(task.endDate)} (${task.durationDays} дн.) | Нажмите для деталей`}
                 >
                   {width * DAY_WIDTH > 80 ? (
                     <>
@@ -270,6 +291,9 @@ export const GanttChart: FC<GanttChartProps> = ({ tasks, loading }) => {
           Сегодня
         </span>
       </div>
+
+      {/* Модалка деталей задачи */}
+      <TaskDetailModal task={selectedTask} onClose={() => setSelectedTask(null)} />
     </div>
   );
 };

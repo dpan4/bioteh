@@ -14,13 +14,18 @@
 
 from __future__ import annotations
 
+import base64
+import logging
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.schemas.task import GanttTask, RawTask
+from app.services.excel_parser import generate_template_excel
 from app.services.scheduler import CyclicDependencyError, calculate_schedule
 from app.services.task_store import store
+
+logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -46,14 +51,31 @@ class UpdateTaskParams(BaseModel):
     )
     assignee: str | None = Field(
         default=None,
-        description='Новый исполнитель. Не передавайте, если менять не нужно. Пример: "Дмитрий Пан"',
-        examples=["Дмитрий Пан"],
+        description=(
+            'Имя исполнителя задачи. '
+            'Если нужно СНЯТЬ/УДАЛИТЬ исполнителя с задачи (например, "удалить Анну из task-1") — '
+            'передавай ПУСТУЮ СТРОКУ "" (не null, а именно пустую строку)! '
+            'Если менять исполнителя не нужно — не передавай этот параметр вообще (оставь null). '
+            'Пример назначения: "Дмитрий Пан". '
+            'Пример снятия: ""'
+        ),
+        examples=["Дмитрий Пан", ""],
     )
     duration_days: int | None = Field(
         default=None,
         ge=1,
-        description='Новая длительность в рабочих днях (не меньше 1). Не передавайте, если менять не нужно. Пример: 7',
-        examples=[7],
+        description=(
+            'Длительность задачи в рабочих днях (не меньше 1). '
+            'ФОРМУЛА РАСЧЁТА: duration_days = (Дата окончания - Дата начала + 1 день). '
+            'ПРИМЕРЫ РАСЧЁТА: '
+            '- Со 2 по 18 августа включительно = 18 - 2 + 1 = 17 дней. '
+            '- С 20 августа по 2 сентября = (2 + 31) - 20 + 1 = 14 дней. '
+            '- С 5 по 12 марта = 12 - 5 + 1 = 8 дней. '
+            'ВНИМАНИЕ: Учитывай количество дней в месяцах при расчёте! '
+            'Не передавай этот параметр, если менять длительность не нужно. '
+            'Пример: 7'
+        ),
+        examples=[7, 17, 14],
     )
     predecessors: list[str] | None = Field(
         default=None,
@@ -98,7 +120,18 @@ class DeleteTasksParams(BaseModel):
 
     task_ids: list[str] = Field(
         min_length=1,
-        description='Список ID удаляемых задач. Пример: ["task-5", "task-6"]',
+        description=(
+            'Список ID задач, которые нужно ПОЛНОСТЬЮ УДАЛИТЬ ИЗ ПРОЕКТА. '
+            'ИСПОЛЬЗУЙ ЭТОТ ИНСТРУМЕНТ ТОЛЬКО если пользователь явно просит УДАЛИТЬ/УБРАТЬ ЗАДАЧУ целиком! '
+            'ЗАПРЕЩЕНО использовать для смены или удаления исполнителя — для этого используй update_task_details с assignee=""! '
+            'Примеры правильного использования: '
+            '- "Удали задачу task-5 из проекта" → delete_tasks(["task-5"]). '
+            '- "Убери задачу Дмитрия" → delete_tasks(["task-3"]). '
+            'Примеры НЕПРАВИЛЬНОГО использования: '
+            '- "Удали Анну из task-1" → НЕ delete_tasks! Используй update_task_details(task_id="task-1", assignee=""). '
+            '- "Убери Дмитрия из графика" → НЕ delete_tasks! Используй update_task_details для смены assignee. '
+            'Пример: ["task-5", "task-6"]'
+        ),
         examples=[["task-5", "task-6"]],
     )
 
@@ -140,12 +173,33 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "delete_tasks",
             "description": (
-                "Удалить одну или несколько задач по их ID. Удаление атомарно: если хотя бы "
-                "один ID не найден, ни одна задача не удаляется. Ссылки на удалённые задачи "
-                "автоматически очищаются из predecessors оставшихся задач. Даты "
-                "пересчитываются."
+                "ПОЛНОСТЬЮ УДАЛИТЬ одну или несколько ЗАДАЧ из проекта. "
+                "КРИТИЧЕСКИ ВАЖНО: ИСПОЛЬЗУЙ ЭТОТ ИНСТРУМЕНТ ТОЛЬКО если пользователь явно просит "
+                "УДАЛИТЬ/УБРАТЬ ЗАДАЧУ ЦЕЛИКОМ из проекта! "
+                "ЗАПРЕЩЕНО использовать для смены или удаления исполнителя — для этого есть "
+                "update_task_details с параметром assignee=\"\"! "
+                "Удаление атомарно: если хотя бы один ID не найден, ни одна задача не удаляется. "
+                "Ссылки на удалённые задачи автоматически очищаются из predecessors оставшихся задач. "
+                "Даты пересчитываются. "
+                "ПРАВИЛЬНЫЕ примеры использования: "
+                "«Удали задачу task-5», «Убери задачу Дмитрия из проекта». "
+                "НЕПРАВИЛЬНЫЕ примеры (НЕ используй delete_tasks!): "
+                "«Удали Анну из task-1» → используй update_task_details(task_id='task-1', assignee='')."
             ),
             "parameters": DeleteTasksParams.model_json_schema(),
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_excel_template",
+            "description": (
+                "Получить эталонный Excel-шаблон для заполнения проекта. Шаблон содержит "
+                "5 колонок (Задача, Описание, Исполнитель, Длительность, Предшественники) "
+                "и 5 демо-строк с примерами заполнения. Предшественники указываются как "
+                "номера строк (1, 2, 3, 4). Возвращает base64-кодированное содержимое .xlsx файла."
+            ),
+            "parameters": {},
         },
     },
 ]
@@ -156,8 +210,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _serialize_tasks(tasks: list[GanttTask]) -> list[dict[str, Any]]:
-    """Сериализует список GanttTask в camelCase-словари для JSON."""
-    return [task.model_dump(by_alias=True) for task in tasks]
+    """Сериализует список GanttTask в camelCase-словари для JSON.
+    
+    ВАЖНО: Использует mode='json' для корректной сериализации date-объектов в ISO-строки.
+    Без mode='json' Pydantic возвращает Python date-объекты, которые не сериализуются в JSON.
+    """
+    return [task.model_dump(by_alias=True, mode='json') for task in tasks]
 
 
 def execute_update_task_details(
@@ -300,24 +358,124 @@ def execute_delete_tasks(task_ids: list[str]) -> dict[str, Any]:
     return {"tasks": _serialize_tasks(scheduled)}
 
 
+def execute_get_excel_template() -> dict[str, Any]:
+    """Возвращает эталонный Excel-шаблон для заполнения проекта (5 колонок).
+
+    Шаблон содержит:
+    - 5 колонок: Задача, Описание, Исполнитель, Длительность (дни), Предшественники.
+    - БЕЗ колонок ID, Дата начала, Дата окончания.
+    - 5 демо-строк с наглядными примерами.
+    - Предшественники указываются как номера строк (1, 2, 3, 4), НЕ task-N.
+
+    Returns:
+        Словарь с ключом "template" (base64-кодированный .xlsx) или "error" (str).
+    """
+    try:
+        template_bytes = generate_template_excel()
+        template_b64 = base64.b64encode(template_bytes).decode("utf-8")
+        return {
+            "template": template_b64,
+            "filename": "gantt_template.xlsx",
+            "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
+    except Exception as exc:
+        return {"error": f"Не удалось сформировать шаблон Excel: {exc}"}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# Диспетчер
+# Диспетчер с валидацией и обработкой ошибок
 # ═══════════════════════════════════════════════════════════════════════════════
+
+def _normalize_arguments(
+    arguments: dict[str, Any], schema_class: type[BaseModel]
+) -> dict[str, Any]:
+    """Нормализует и валидирует аргументы инструмента.
+
+    Выполняет:
+    1. Маппинг camelCase → snake_case для совместимости с LLM
+    2. Приведение типов (строка "16" → int 16)
+    3. Валидацию через Pydantic-схему
+
+    Args:
+        arguments: Сырые аргументы от LLM (могут быть camelCase).
+        schema_class: Pydantic-модель параметров инструмента.
+
+    Returns:
+        Валидированный и нормализованный словарь аргументов в snake_case.
+
+    Raises:
+        ValueError: Если валидация Pydantic не прошла.
+    """
+    camel_to_snake = {
+        "taskId": "task_id",
+        "durationDays": "duration_days",
+        "taskIds": "task_ids",
+    }
+
+    normalized = {}
+    for key, value in arguments.items():
+        snake_key = camel_to_snake.get(key, key)
+        normalized[snake_key] = value
+
+    try:
+        validated = schema_class.model_validate(normalized)
+        return validated.model_dump(exclude_none=True)
+    except ValidationError as exc:
+        error_messages = []
+        for error in exc.errors():
+            field = " -> ".join(str(loc) for loc in error["loc"])
+            msg = error["msg"]
+            error_messages.append(f"{field}: {msg}")
+        raise ValueError(
+            f"Ошибка валидации параметров: {'; '.join(error_messages)}"
+        ) from exc
+
 
 def execute_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Вызывает инструмент мутации по имени и аргументам.
 
+    Выполняет валидацию аргументов, маппинг camelCase → snake_case,
+    приведение типов и обработку ошибок. При любой ошибке возвращает
+    структурированный ответ {"error": "..."} вместо пробрасывания исключения.
+
     Args:
-        name: Имя инструмента (update_task_details, add_new_task, delete_tasks).
-        arguments: Словарь аргументов, полученный от LLM (camelCase).
+        name: Имя инструмента (update_task_details, add_new_task, delete_tasks, get_excel_template).
+        arguments: Словарь аргументов, полученный от LLM (может быть camelCase).
 
     Returns:
-        Словарь с ключом "tasks" (list[GanttTask] в camelCase) или "error" (str).
+        Словарь с ключом "tasks" (list[GanttTask] в camelCase) или "error" (str),
+        либо "template" (base64-кодированный .xlsx) для get_excel_template.
     """
-    if name == "update_task_details":
-        return execute_update_task_details(**arguments)
-    if name == "add_new_task":
-        return execute_add_new_task(**arguments)
-    if name == "delete_tasks":
-        return execute_delete_tasks(**arguments)
-    return {"error": f"Неизвестный инструмент: '{name}'."}
+    try:
+        if name == "update_task_details":
+            validated_args = _normalize_arguments(arguments, UpdateTaskParams)
+            return execute_update_task_details(**validated_args)
+
+        if name == "add_new_task":
+            validated_args = _normalize_arguments(arguments, AddTaskParams)
+            return execute_add_new_task(**validated_args)
+
+        if name == "delete_tasks":
+            validated_args = _normalize_arguments(arguments, DeleteTasksParams)
+            return execute_delete_tasks(**validated_args)
+
+        if name == "get_excel_template":
+            return execute_get_excel_template()
+
+        return {"error": f"Неизвестный инструмент: '{name}'."}
+
+    except ValueError as exc:
+        logger.error(
+            f"Ошибка валидации аргументов инструмента {name}: {exc}",
+            exc_info=True,
+        )
+        return {"error": f"Ошибка валидации параметров: {exc}"}
+
+    except Exception as exc:
+        logger.error(
+            f"Необработанная ошибка при выполнении инструмента {name}: {exc}",
+            exc_info=True,
+        )
+        return {
+            "error": f"Внутренняя ошибка при выполнении инструмента: {exc}"
+        }

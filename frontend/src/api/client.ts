@@ -166,7 +166,10 @@ export async function uploadExcel(file: File): Promise<GanttTask[]> {
 }
 
 /**
- * Скачивает текущее расписание проекта в виде Excel-файла (.xlsx).
+ * Скачивает текущее расписание проекта в виде Excel-файла (8 колонок с датами).
+ *
+ * Содержит: ID, Задача, Описание, Исполнитель, Длительность, Дата начала,
+ * Дата окончания (с формулами), Предшественники.
  *
  * Браузер автоматически сохраняет файл как gantt_plan.xlsx через
  * программный клик по временной ссылке.
@@ -193,6 +196,45 @@ export async function exportExcel(): Promise<void> {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = "gantt_plan.xlsx";
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Скачивает эталонный шаблон Excel для заполнения проекта (5 колонок БЕЗ дат).
+ *
+ * Содержит: Задача, Описание, Исполнитель, Длительность (дни), Предшественники.
+ * БЕЗ колонок ID, Дата начала, Дата окончания (даты рассчитает бэкенд при импорте).
+ *
+ * Шаблон включает 5 демо-строк с примерами заполнения. Предшественники
+ * указываются как номера строк (1, 2, 3, 4), а НЕ технические ID (task-N).
+ *
+ * Браузер автоматически сохраняет файл как gantt_template.xlsx.
+ *
+ * @throws {Error} При ошибке сети или если бэкенд не смог сформировать шаблон.
+ */
+export async function downloadTemplate(): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${BASE_URL}/tasks/template`);
+  } catch {
+    throw new Error(
+      "Не удалось подключиться к серверу для скачивания шаблона.",
+    );
+  }
+
+  if (!response.ok) {
+    const detail = await extractApiError(response);
+    throw new Error(detail || "Не удалось сформировать шаблон Excel.");
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "gantt_template.xlsx";
   document.body.appendChild(anchor);
   anchor.click();
   document.body.removeChild(anchor);
