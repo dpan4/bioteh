@@ -127,8 +127,12 @@ def calculate_schedule(
     Строит DAG по полю predecessors, выполняет топологическую сортировку
     алгоритмом Кана и вычисляет даты:
     - задача без предшественников: start_date = project_start_date;
-    - задача с предшественниками: start_date = max(end_date предшественников);
-    - end_date = start_date + timedelta(days=duration_days).
+    - задача с предшественниками: start_date = max(end_date предшественников) + 1 день;
+    - end_date = start_date + duration_days - 1 (включительно).
+
+    Формула end_date включает крайний день: задача с началом 02.08 и
+    duration_days=17 заканчивается 18.08 (02 + 17 - 1 = 18).
+    Следующая задача стартует на следующий день: 19.08.
 
     Args:
         tasks: Список исходных задач без дат.
@@ -190,13 +194,19 @@ def calculate_schedule(
     for task_id in topological_order:
         task = tasks_by_id[task_id]
         if task.predecessors:
-            start_date = max(
+            # Начало задачи — день ПОСЛЕ окончания самого позднего предшественника.
+            # end_date предшественника — последний день его работы, поэтому +1.
+            predecessor_max_end = max(
                 end_dates_by_id[predecessor_id]
                 for predecessor_id in task.predecessors
             )
+            start_date = predecessor_max_end + timedelta(days=1)
         else:
             start_date = project_start_date
-        end_date = start_date + timedelta(days=task.duration_days)
+        # end_date — последний день работы по задаче включительно.
+        # Формула: end_date = start_date + duration_days - 1
+        # Пример: начало 2 августа, 17 дней → конец 18 августа (2+17-1=18).
+        end_date = start_date + timedelta(days=task.duration_days - 1)
         end_dates_by_id[task_id] = end_date
         scheduled_tasks.append(
             GanttTask(

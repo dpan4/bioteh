@@ -9,14 +9,18 @@
     -> Tool Call -> mcp_server -> TaskStore + Scheduler
     -> GanttTask[] -> ответ пользователю.
 
-Ошибки CyclicDependencyError/ValueError из mcp-инструментов возвращаются
-в текстовом ответе LLM, приложение не падает.
+Логирование: каждый запрос пишется в logs/chat_YYYY-MM-DD.log рядом с main.py.
+Лог содержит: входящий запрос, состояние задач (системный промпт), каждый
+tool call с аргументами и результатом (задачи с датами), финальный ответ.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -30,6 +34,34 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
 
 _MAX_TOOL_CALL_ROUNDS = 5
+
+# Папка для логов — рядом с корнем бэкенда (на уровень выше app/)
+_LOGS_DIR = Path(__file__).resolve().parent.parent.parent / "logs"
+
+
+def _get_log_path() -> Path:
+    """Возвращает путь к файлу лога для текущей даты."""
+    _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    return _LOGS_DIR / f"chat_{date_str}.log"
+
+
+def _write_log(entry: dict[str, Any]) -> None:
+    """Записывает одну запись лога в файл как JSON-строку (NDJSON).
+
+    Каждый вызов /api/chat пишет одну JSON-строку в файл лога.
+    Ошибки записи логируются в stderr, но не останавливают запрос.
+
+    Args:
+        entry: Словарь с данными запроса для записи в лог.
+    """
+    try:
+        log_path = _get_log_path()
+        line = json.dumps(entry, ensure_ascii=False, default=str) + "\n"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as exc:
+        logger.warning(f"Не удалось записать лог: {exc}")
 
 
 class ChatRequest(BaseModel):
@@ -49,7 +81,7 @@ class ChatResponse(BaseModel):
         description="Текстовый ответ AI-ассистента.",
     )
     tasks: list[dict[str, object]] = Field(
-        description="Актуальный список задач в camelCase (id, title, description, assignee, durationDays, predecessors, startDate, endDate).",
+        description="Актуальный список задач в camelCase.",
     )
 
 
@@ -64,10 +96,7 @@ def _format_tool_result(tool_name: str, result: dict[str, Any]) -> str:
         JSON-строка с результатом или ошибкой на русском языке.
     """
     if "error" in result:
-        return json.dumps(
-            {"error": result["error"]}, ensure_ascii=False
-        )
-    # Для сокращения контекста отправляем только ключевые поля задач.
+        return json.dumps({"error": result["error"]}, ensure_ascii=False)
     tasks_summary = [
         {
             "id": t["id"],
@@ -81,23 +110,47 @@ def _format_tool_result(tool_name: str, result: dict[str, Any]) -> str:
     return json.dumps({"updated_tasks": tasks_summary}, ensure_ascii=False)
 
 
+def _get_current_tasks() -> list[dict[str, object]]:
+    """Безопасно получает текущий список задач из хранилища.
+
+    Использует mode='json' для корректной сериализации date-объектов в ISO-строки.
+    """
+    try:
+        gantt = store.get_gantt_tasks()
+        serialized = [task.model_dump(by_alias=True, mode="json") for task in gantt]
+        logger.debug(f"Получено {len(serialized)} задач из TaskStore (GanttTask)")
+        return serialized
+    except Exception as exc:
+        logger.warning(
+            f"Не удалось получить GanttTask, используем RawTask: {exc}",
+            exc_info=True,
+        )
+        raw = store.get_raw_tasks()
+        serialized = [task.model_dump(by_alias=True, mode="json") for task in raw]
+        logger.debug(f"Получено {len(serialized)} задач из TaskStore (RawTask)")
+        return serialized
+
+
 async def _run_tool_calling_loop(
     messages: list[dict[str, Any]],
+    log_entry: dict[str, Any],
 ) -> tuple[str, list[dict[str, object]]]:
     """Выполняет цикл Tool Calling: отправка в LLM → инструменты → ответ.
 
     Args:
         messages: История сообщений (начинается с system + user).
+        log_entry: Словарь лога текущего запроса — tool calls пишутся сюда.
 
     Returns:
         Кортеж (текстовый ответ AI, актуальный список задач).
     """
     client = get_client()
+    log_entry["tool_calls"] = []
     logger.debug(f"Начало Tool Calling Loop с {len(messages)} сообщениями")
 
     for round_num in range(_MAX_TOOL_CALL_ROUNDS):
         logger.debug(f"Tool Calling Loop: раунд {round_num + 1}/{_MAX_TOOL_CALL_ROUNDS}")
-        
+
         try:
             response = await client.chat(messages, TOOL_DEFINITIONS)
         except Exception as exc:
@@ -106,7 +159,7 @@ async def _run_tool_calling_loop(
                 exc_info=True,
             )
             raise
-        
+
         reply = response["reply"]
         tool_calls = response["tool_calls"]
         logger.debug(f"LLM ответ получен: {len(tool_calls)} вызовов инструментов")
@@ -116,23 +169,27 @@ async def _run_tool_calling_loop(
             tasks = _get_current_tasks()
             return reply, tasks
 
-        assistant_message: dict[str, Any] = {"role": "assistant", "content": reply or None}
-        if tool_calls:
-            assistant_message["tool_calls"] = [
-                {
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {
-                        "name": tc["name"],
-                        "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
-                    },
-                }
-                for tc in tool_calls
-            ]
+        assistant_message: dict[str, Any] = {
+            "role": "assistant",
+            "content": reply or None,
+        }
+        assistant_message["tool_calls"] = [
+            {
+                "id": tc["id"],
+                "type": "function",
+                "function": {
+                    "name": tc["name"],
+                    "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
+                },
+            }
+            for tc in tool_calls
+        ]
         messages.append(assistant_message)
 
         for tc in tool_calls:
-            logger.debug(f"Выполнение инструмента: {tc['name']} с аргументами: {tc['arguments']}")
+            logger.debug(
+                f"Выполнение инструмента: {tc['name']} с аргументами: {tc['arguments']}"
+            )
             try:
                 result = execute_tool_call(tc["name"], tc["arguments"])
                 logger.debug(f"Инструмент {tc['name']} выполнен успешно")
@@ -145,40 +202,45 @@ async def _run_tool_calling_loop(
                     "error": f"Внутренняя ошибка при выполнении инструмента: {exc}"
                 }
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc["id"],
-                "content": _format_tool_result(tc["name"], result),
-            })
+            # Записываем в лог: аргументы, результат и итоговые задачи с датами
+            tc_log: dict[str, Any] = {
+                "round": round_num + 1,
+                "tool": tc["name"],
+                "arguments": tc["arguments"],
+            }
+            if "error" in result:
+                tc_log["error"] = result["error"]
+            else:
+                tc_log["result_tasks"] = [
+                    {
+                        "id": t["id"],
+                        "title": t["title"],
+                        "assignee": t.get("assignee", ""),
+                        "durationDays": t.get("durationDays"),
+                        "predecessors": t.get("predecessors", []),
+                        "startDate": t["startDate"],
+                        "endDate": t["endDate"],
+                    }
+                    for t in result.get("tasks", [])
+                ]
+            log_entry["tool_calls"].append(tc_log)
 
-    logger.warning(f"Tool Calling Loop: достигнут лимит {_MAX_TOOL_CALL_ROUNDS} итераций")
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": _format_tool_result(tc["name"], result),
+                }
+            )
+
+    logger.warning(
+        f"Tool Calling Loop: достигнут лимит {_MAX_TOOL_CALL_ROUNDS} итераций"
+    )
     tasks = _get_current_tasks()
     return (
         "Достигнут лимит итераций обработки. Пожалуйста, уточните запрос.",
         tasks,
     )
-
-
-def _get_current_tasks() -> list[dict[str, object]]:
-    """Безопасно получает текущий список задач из хранилища.
-    
-    ВАЖНО: Использует mode='json' для корректной сериализации date-объектов в ISO-строки.
-    Без mode='json' Pydantic возвращает Python date-объекты, которые не сериализуются в JSON.
-    """
-    try:
-        gantt = store.get_gantt_tasks()
-        serialized = [task.model_dump(by_alias=True, mode='json') for task in gantt]
-        logger.debug(f"Получено {len(serialized)} задач из TaskStore (GanttTask)")
-        return serialized
-    except Exception as exc:
-        logger.warning(
-            f"Не удалось получить GanttTask, используем RawTask: {exc}",
-            exc_info=True,
-        )
-        raw = store.get_raw_tasks()
-        serialized = [task.model_dump(by_alias=True, mode='json') for task in raw]
-        logger.debug(f"Получено {len(serialized)} задач из TaskStore (RawTask)")
-        return serialized
 
 
 @router.post("/chat")
@@ -192,8 +254,7 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
     4. Если LLM вызывает инструменты — они выполняются над TaskStore,
        результат возвращается LLM, цикл повторяется.
     5. Финальный ответ: текст от LLM + актуальный список задач.
-    6. При ошибках (цикл, невалидные ссылки) LLM получает текст ошибки
-       и формирует понятное сообщение пользователю.
+    6. Весь процесс записывается в logs/chat_YYYY-MM-DD.log.
 
     Args:
         request: Объект ChatRequest с полем message.
@@ -201,12 +262,26 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
     Returns:
         Словарь с ключами reply (str) и tasks (list[dict]).
     """
+    # Инициализируем запись лога для этого запроса
+    log_entry: dict[str, Any] = {
+        "timestamp": datetime.now().isoformat(),
+        "user_message": request.message,
+        "tasks_before": [],
+        "system_prompt_tasks": [],
+        "tool_calls": [],
+        "reply": "",
+        "tasks_after": [],
+        "error": None,
+    }
+
     try:
         # === ИНИЦИАЛИЗАЦИЯ LLM-КЛИЕНТА ===
         try:
             client = get_client()
         except ValueError as exc:
             logger.error(f"LLM-сервис недоступен: {exc}", exc_info=True)
+            log_entry["error"] = f"LLM-сервис недоступен: {exc}"
+            _write_log(log_entry)
             raise HTTPException(
                 status_code=503,
                 detail=f"LLM-сервис недоступен: {exc}",
@@ -220,10 +295,28 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
                 f"Не удалось получить текущий список задач: {exc}",
                 exc_info=True,
             )
+            log_entry["error"] = f"Не удалось получить задачи: {exc}"
+            _write_log(log_entry)
             raise HTTPException(
                 status_code=500,
                 detail=f"Не удалось получить текущий список задач: {exc}",
             ) from exc
+
+        # Записываем состояние задач ДО изменений
+        log_entry["tasks_before"] = [
+            {
+                "id": t.get("id"),
+                "title": t.get("title"),
+                "assignee": t.get("assignee", ""),
+                "durationDays": t.get("durationDays"),
+                "predecessors": t.get("predecessors", []),
+                "startDate": t.get("startDate"),
+                "endDate": t.get("endDate"),
+            }
+            for t in current_tasks
+        ]
+        # Записываем компактное представление задач, которое видит LLM
+        log_entry["system_prompt_tasks"] = log_entry["tasks_before"]
 
         # === ФОРМИРОВАНИЕ ИСТОРИИ СООБЩЕНИЙ ===
         try:
@@ -236,6 +329,8 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
                 f"Ошибка при формировании системного промпта: {exc}",
                 exc_info=True,
             )
+            log_entry["error"] = f"Ошибка системного промпта: {exc}"
+            _write_log(log_entry)
             raise HTTPException(
                 status_code=500,
                 detail=f"Ошибка при формировании системного промпта: {exc}",
@@ -243,16 +338,34 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
 
         # === ВЫПОЛНЕНИЕ TOOL CALLING LOOP ===
         try:
-            reply, tasks = await _run_tool_calling_loop(messages)
+            reply, tasks = await _run_tool_calling_loop(messages, log_entry)
         except Exception as exc:
             logger.error(
                 f"Ошибка при обращении к LLM или выполнении Tool Calling Loop: {exc}",
                 exc_info=True,
             )
+            log_entry["error"] = f"Ошибка Tool Calling Loop: {exc}"
+            _write_log(log_entry)
             raise HTTPException(
                 status_code=502,
                 detail=f"Ошибка при обращении к LLM: {exc}",
             ) from exc
+
+        # === ФИНАЛЬНЫЙ ЛОГ — СОСТОЯНИЕ ПОСЛЕ ИЗМЕНЕНИЙ ===
+        log_entry["reply"] = reply
+        log_entry["tasks_after"] = [
+            {
+                "id": t.get("id"),
+                "title": t.get("title"),
+                "assignee": t.get("assignee", ""),
+                "durationDays": t.get("durationDays"),
+                "predecessors": t.get("predecessors", []),
+                "startDate": t.get("startDate"),
+                "endDate": t.get("endDate"),
+            }
+            for t in tasks
+        ]
+        _write_log(log_entry)
 
         # === ФОРМИРОВАНИЕ И ВОЗВРАТ ОТВЕТА ===
         try:
@@ -269,15 +382,15 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
             ) from exc
 
     except HTTPException:
-        # Пробрасываем HTTPException как есть (уже залогировано выше)
         raise
 
     except Exception as exc:
-        # Критическая необработанная ошибка
         logger.error(
             f"CRITICAL CHAT ERROR — необработанное исключение: {exc}",
             exc_info=True,
         )
+        log_entry["error"] = f"CRITICAL: {exc}"
+        _write_log(log_entry)
         raise HTTPException(
             status_code=500,
             detail=f"Критическая ошибка при обработке чата: {str(exc)}",
