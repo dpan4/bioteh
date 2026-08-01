@@ -242,6 +242,40 @@ export async function downloadTemplate(): Promise<void> {
 }
 
 /**
+ * Синхронизирует состояние TaskStore на бэкенде с текущим состоянием фронтенда.
+ *
+ * Используется при Undo/Redo: фронтенд восстанавливает предыдущее состояние
+ * локально, но бэкенд хранит своё собственное состояние. Чтобы AI видел
+ * актуальные задачи, нужно явно синхронизировать TaskStore.
+ *
+ * Отправляет RawTask[] (без дат) — бэкенд пересчитывает даты через DAG Scheduler
+ * и возвращает GanttTask[]. Пустой массив — корректное состояние (пустой проект).
+ *
+ * @param tasks — Текущий массив GanttTask[] с фронтенда.
+ * @returns Обновлённый массив GanttTask[] с пересчитанными датами от бэкенда.
+ * @throws {Error} При ошибке сети, цикле зависимостей или невалидных данных.
+ */
+export async function syncTasksWithBackend(
+  tasks: GanttTask[],
+): Promise<GanttTask[]> {
+  // Отправляем только поля RawTask (без startDate/endDate) — бэкенд пересчитает даты
+  const rawTasks = tasks.map(({ id, title, description, assignee, durationDays, predecessors }) => ({
+    id,
+    title,
+    description,
+    assignee,
+    durationDays,
+    predecessors,
+  }));
+
+  return fetchValidated("/tasks/sync", GanttTaskArraySchema, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rawTasks),
+  });
+}
+
+/**
  * Отправляет сообщение в чат с AI-ассистентом и получает текстовый ответ
  * вместе с обновлённым списком задач.
  *

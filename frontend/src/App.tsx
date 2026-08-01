@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getTasks } from "./api/client";
+import { getTasks, syncTasksWithBackend } from "./api/client";
 import { ChatPanel } from "./components/ChatPanel";
 import { FileUpload } from "./components/FileUpload";
 import { GanttChart } from "./components/GanttChart";
@@ -95,6 +95,27 @@ export default function App() {
     console.log("[App] setTasks выполнен");
   }, [setTasks]);
 
+  // Обёртки над undo/redo — фронтенд обновляет локальное состояние,
+  // синхронизация бэкенда произойдёт автоматически через useEffect ниже.
+  const handleUndo = useCallback(() => {
+    undo();
+  }, [undo]);
+
+  const handleRedo = useCallback(() => {
+    redo();
+  }, [redo]);
+
+  // При каждом изменении tasks (включая undo/redo) синхронизируем бэкенд,
+  // чтобы AI всегда видел актуальное состояние проекта.
+  useEffect(() => {
+    // Пропускаем синхронизацию во время первоначальной загрузки
+    if (loading) return;
+    syncTasksWithBackend(tasks).catch((err) => {
+      // Тихая ошибка — UI уже корректен, не нужен Toast
+      console.warn("[App] Синхронизация бэкенда не удалась:", err);
+    });
+  }, [tasks, loading]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -136,8 +157,8 @@ export default function App() {
         <UndoRedoControls
           canUndo={canUndo}
           canRedo={canRedo}
-          onUndo={undo}
-          onRedo={redo}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
         />
       </header>
 

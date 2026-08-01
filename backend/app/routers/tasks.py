@@ -3,6 +3,7 @@
 Эндпоинты:
   GET  /api/tasks          — список задач с датами (seed при пустом хранилище).
   POST /api/tasks/upload    — загрузка Excel-файла, замена состояния.
+  PUT  /api/tasks/sync      — синхронизация состояния из фронтенда (Undo/Redo).
   GET  /api/tasks/export    — скачать заполненный .xlsx с расписанием (8 колонок).
   GET  /api/tasks/template  — скачать эталонный шаблон для заполнения (5 колонок).
 
@@ -14,6 +15,7 @@
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
+from app.schemas.task import RawTask
 from app.services.excel_parser import (
     generate_excel,
     generate_template_excel,
@@ -46,6 +48,37 @@ def get_tasks() -> list[dict[str, object]]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return [task.model_dump(by_alias=True, mode='json') for task in tasks]
+
+
+@router.put("/sync")
+def sync_tasks(raw_tasks: list[RawTask]) -> list[dict[str, object]]:
+    """Синхронизирует состояние TaskStore с фронтендом (используется для Undo/Redo).
+
+    Принимает RawTask[] в camelCase (те же поля, что и в GanttTask, но без дат).
+    Заменяет содержимое TaskStore и возвращает пересчитанный GanttTask[].
+
+    Если передан пустой список — TaskStore очищается (задач нет, seed НЕ загружается).
+    Это корректное состояние: пользователь мог откатиться к пустому проекту.
+
+    Args:
+        raw_tasks: Список задач без дат в camelCase JSON (RawTask[]).
+
+    Returns:
+        Обновлённый список GanttTask с пересчитанными датами в camelCase JSON.
+
+    Raises:
+        HTTPException 400: При цикле зависимостей или невалидных ссылках.
+    """
+    try:
+        if len(raw_tasks) == 0:
+            # Явный сброс: очищаем хранилище без seed
+            store._raw_tasks = []
+            return []
+        gantt_tasks = store.set_raw_tasks(raw_tasks)
+    except (CyclicDependencyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return [task.model_dump(by_alias=True, mode='json') for task in gantt_tasks]
 
 
 @router.post("/upload")
