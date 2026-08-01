@@ -5,21 +5,24 @@
   исключительно backend/app/services/scheduler.py, system.md, инвариант 1);
 - generate_excel(): list[GanttTask] -> байты .xlsx с готовым расписанием.
 
-Ожидаемый формат входного файла: первая строка — шапка с названиями колонок
-(регистр и лишние пробелы игнорируются), далее — по одной задаче на строку.
+Формат входного файла — строго 5 колонок (регистр и пробелы игнорируются):
+  Задача / Title / Название
+  Описание / Description
+  Исполнитель / Assignee
+  Длительность / Duration
+  Предшественники / Predecessors
 
-Поддерживаемые названия колонок (русский или английский вариант):
-- "задача" или "title"                 -> title (обязательная)
-- "описание" или "description"         -> description
-- "исполнитель" или "assignee"         -> assignee
-- "длительность" или "duration_days"   -> duration_days (обязательная, int >= 1)
-- "предшественники" или "predecessors" -> predecessors ("task-1, task-2" -> list)
-- "id" или "ид"                        -> id (опциональная; если колонки нет
-  или ячейка пуста — id генерируется автоматически: task-1, task-2, ...)
+ID генерируется автоматически: task-1, task-2, ... по порядку строк.
+Предшественники: числовые номера (1, 2 -> task-1, task-2) или строковые ID.
+
+Формат выходного файла — 8 колонок:
+  ID | Задача | Описание | Исполнитель | Длительность | Дата начала | Дата окончания | Предшественники
+Дата окончания — живая формула Excel (= Дата начала + Длительность).
 """
 
 import io
 import re
+from datetime import date as date_type
 from typing import Any
 
 from openpyxl import Workbook, load_workbook
@@ -29,85 +32,65 @@ from pydantic import ValidationError
 
 from app.schemas.task import GanttTask, RawTask
 
-# Маппинг нормализованного названия колонки Excel -> внутреннее имя поля.
+# ── Маппинг колонок (строго 5, без ID) ──────────────────────────────────────
+
 _COLUMN_ALIASES: dict[str, str] = {
     "задача": "title",
     "title": "title",
+    "название": "title",
     "описание": "description",
     "description": "description",
     "исполнитель": "assignee",
     "assignee": "assignee",
     "длительность": "duration_days",
     "длительность (дни)": "duration_days",
+    "duration": "duration_days",
     "duration_days": "duration_days",
     "предшественники": "predecessors",
     "predecessors": "predecessors",
-    "id": "id",
-    "ид": "id",
 }
 
-# Поля, без которых распарсить задачу невозможно.
 _REQUIRED_FIELDS: dict[str, str] = {
-    "title": '"Задача" / "title"',
-    "duration_days": '"Длительность" / "duration_days"',
+    "title": '"Задача" / "Title" / "Название"',
+    "duration_days": '"Длительность" / "Duration"',
 }
 
-# Колонки выходного Excel-файла: (заголовок, ширина колонки).
+# ── Колонки выходного Excel (8 колонок) ─────────────────────────────────────
+# A=ID, B=Задача, C=Описание, D=Исполнитель, E=Длительность,
+# F=Дата начала, G=Дата окончания, H=Предшественники
+
 _EXPORT_COLUMNS: list[tuple[str, int]] = [
+    ("ID", 10),
     ("Задача", 30),
     ("Описание", 45),
     ("Исполнитель", 20),
-    ("Длительность (дни)", 18),
+    ("Длительность", 14),
     ("Дата начала", 14),
-    ("Дата окончания", 16),
+    ("Дата окончания", 14),
     ("Предшественники", 25),
 ]
 
+# Индексы колонок для формул (1-based)
+_COL_START = 6   # F — Дата начала
+_COL_DURATION = 5  # E — Длительность
+_COL_END = 7       # G — Дата окончания
+
+# ── Вспомогательные функции ──────────────────────────────────────────────────
+
 
 def _normalize_header(value: Any) -> str:
-    """Приводит название колонки к нормализованному виду.
-
-    Args:
-        value: Сырое значение ячейки шапки.
-
-    Returns:
-        Название колонки в нижнем регистре без лишних пробелов.
-    """
     if value is None:
         return ""
     return re.sub(r"\s+", " ", str(value)).strip().lower()
 
 
 def _cell_to_str(value: Any) -> str:
-    """Преобразует значение ячейки в строку.
-
-    Args:
-        value: Сырое значение ячейки.
-
-    Returns:
-        Строка без обрамляющих пробелов; пустая строка для None.
-    """
     if value is None:
         return ""
     return str(value).strip()
 
 
 def _parse_duration(value: Any, row_number: int) -> int:
-    """Преобразует значение ячейки длительности в int >= 1.
-
-    Excel часто хранит целые числа как float (5.0), поэтому такие значения
-    принимаются, если дробная часть нулевая.
-
-    Args:
-        value: Сырое значение ячейки длительности.
-        row_number: Номер строки Excel (для сообщения об ошибке).
-
-    Returns:
-        Длительность задачи в рабочих днях.
-
-    Raises:
-        ValueError: Если значение пустое, не число, не целое или меньше 1.
-    """
     text = _cell_to_str(value)
     if text == "":
         raise ValueError(
@@ -135,14 +118,22 @@ def _parse_duration(value: Any, row_number: int) -> int:
     return duration
 
 
-def _parse_predecessors(value: Any) -> list[str]:
-    """Разбирает строку с ID предшественников в список.
+def _parse_predecessors(value: Any, row_number: int) -> list[str]:
+    """Разбирает предшественников: числовые номера строк или строковые ID.
 
-    Поддерживаются разделители запятая и точка с запятой:
-    "task-1, task-2" или "task-1; task-2" -> ["task-1", "task-2"].
+    Поддерживаются разделители запятая и точка с запятой.
+
+    Числовые значения (1, 2, 3) преобразуются в task-N:
+      "1"       -> ["task-1"]
+      "1, 2"    -> ["task-1", "task-2"]
+      "1; 2"    -> ["task-1", "task-2"]
+
+    Строковые ID оставляются как есть:
+      "task-1, task-2" -> ["task-1", "task-2"]
 
     Args:
         value: Сырое значение ячейки предшественников.
+        row_number: Номер строки (для сообщений об ошибках).
 
     Returns:
         Список ID задач-предшественников (возможно пустой).
@@ -150,23 +141,58 @@ def _parse_predecessors(value: Any) -> list[str]:
     text = _cell_to_str(value)
     if text == "":
         return []
-    return [part.strip() for part in re.split(r"[;,]", text) if part.strip()]
+
+    parts = [p.strip() for p in re.split(r"[;,]", text) if p.strip()]
+    result: list[str] = []
+    for part in parts:
+        if re.match(r"^\d+$", part):
+            num = int(part)
+            if num < 1:
+                raise ValueError(
+                    f"Строка {row_number}: номер предшественника '{part}' "
+                    "должен быть положительным числом."
+                )
+            if num >= row_number:
+                raise ValueError(
+                    f"Строка {row_number}: номер предшественника '{part}' "
+                    "ссылается на строку ({num}) не ранее текущей ({row_number}). "
+                    "Предшественник должен быть выше по списку."
+                )
+            result.append(f"task-{num}")
+        else:
+            result.append(part)
+    return result
+
+
+# ── Парсер импорта ───────────────────────────────────────────────────────────
 
 
 def parse_excel(file_bytes: bytes) -> list[RawTask]:
-    """Читает .xlsx-файл и возвращает список задач без дат.
+    """Читает .xlsx-файл со строго 5 колонками и возвращает список RawTask.
+
+    ID генерируется автоматически: первая строка данных -> task-1,
+    вторая -> task-2, и т.д.
+
+    Ожидаемые колонки (регистр и лишние пробелы игнорируются):
+      Задача / Title / Название           (обязательная)
+      Описание / Description              (опциональная, default "")
+      Исполнитель / Assignee              (опциональная, default "")
+      Длительность / Duration             (обязательная, int >= 1)
+      Предшественники / Predecessors      (опциональная, default [])
+
+    Предшественники: числа (1, 2) -> task-1, task-2; строки -> как есть.
+
+    Даты НЕ вычисляются — это делает только scheduler.py (инвариант 1).
 
     Args:
         file_bytes: Содержимое Excel-файла (.xlsx) в виде байтов.
 
     Returns:
-        Список валидированных RawTask в порядке строк файла. Даты задач
-        НЕ вычисляются — это делает только scheduler.py.
+        Список валидированных RawTask в порядке строк файла.
 
     Raises:
-        ValueError: Если файл повреждён или не является .xlsx, отсутствуют
-            обязательные колонки, встречены невалидные значения
-            или дублирующиеся ID задач.
+        ValueError: Файл повреждён, отсутствуют обязательные колонки,
+            невалидные значения, пустой файл.
     """
     try:
         workbook = load_workbook(
@@ -191,7 +217,6 @@ def parse_excel(file_bytes: bytes) -> list[RawTask]:
                 "Excel-файл пуст: отсутствует строка с названиями колонок."
             )
 
-        # Индекс колонки -> внутреннее имя поля.
         column_map: dict[int, str] = {}
         for index, raw_header in enumerate(header_row):
             field = _COLUMN_ALIASES.get(_normalize_header(raw_header))
@@ -211,8 +236,7 @@ def parse_excel(file_bytes: bytes) -> list[RawTask]:
             )
 
         tasks: list[RawTask] = []
-        used_ids: set[str] = set()
-        auto_id_counter = 0
+        task_index = 0
 
         for row_number, row in enumerate(rows, start=2):
             values: dict[str, Any] = {
@@ -224,29 +248,18 @@ def parse_excel(file_bytes: bytes) -> list[RawTask]:
             other_cells_empty = all(
                 _cell_to_str(values.get(field)) == ""
                 for field in ("description", "assignee", "duration_days",
-                              "predecessors", "id")
+                              "predecessors")
             )
             if title == "" and other_cells_empty:
-                continue  # Полностью пустая строка — пропускаем.
+                continue
             if title == "":
                 raise ValueError(
                     f"Строка {row_number}: не заполнено название задачи "
-                    '(колонка "Задача" / "title").'
+                    '(колонка "Задача" / "Title" / "Название").'
                 )
 
-            task_id = _cell_to_str(values.get("id"))
-            if task_id == "":
-                auto_id_counter += 1
-                task_id = f"task-{auto_id_counter}"
-                while task_id in used_ids:
-                    auto_id_counter += 1
-                    task_id = f"task-{auto_id_counter}"
-            if task_id in used_ids:
-                raise ValueError(
-                    f"Строка {row_number}: дублирующийся идентификатор задачи "
-                    f"'{task_id}'. Каждая задача должна иметь уникальный id."
-                )
-            used_ids.add(task_id)
+            task_index += 1
+            task_id = f"task-{task_index}"
 
             try:
                 task = RawTask(
@@ -257,7 +270,9 @@ def parse_excel(file_bytes: bytes) -> list[RawTask]:
                     duration_days=_parse_duration(
                         values.get("duration_days"), row_number
                     ),
-                    predecessors=_parse_predecessors(values.get("predecessors")),
+                    predecessors=_parse_predecessors(
+                        values.get("predecessors"), task_index + 1
+                    ),
                 )
             except ValidationError as exc:
                 raise ValueError(
@@ -278,15 +293,27 @@ def parse_excel(file_bytes: bytes) -> list[RawTask]:
         workbook.close()
 
 
+# ── Экспортер ────────────────────────────────────────────────────────────────
+
+
 def generate_excel(tasks: list[GanttTask]) -> bytes:
-    """Формирует .xlsx-файл с рассчитанным расписанием проекта.
+    """Формирует .xlsx-файл с расписанием (8 колонок, формулы, оформление).
+
+    Колонки:
+      A: ID
+      B: Задача
+      C: Описание
+      D: Исполнитель
+      E: Длительность
+      F: Дата начала   (ISO YYYY-MM-DD)
+      G: Дата окончания (живая формула = F{row} + E{row})
+      H: Предшественники
 
     Args:
         tasks: Список задач с датами, рассчитанными DAG Scheduler.
 
     Returns:
-        Содержимое Excel-файла в виде байтов (файл формируется в памяти
-        через io.BytesIO, на диск ничего не записывается).
+        Содержимое Excel-файла в виде байтов.
     """
     workbook = Workbook()
     worksheet = workbook.active
@@ -306,17 +333,28 @@ def generate_excel(tasks: list[GanttTask]) -> bytes:
     worksheet.freeze_panes = "A2"
 
     for row_index, task in enumerate(tasks, start=2):
-        row_values: list[Any] = [
-            task.title,
-            task.description,
-            task.assignee,
-            task.duration_days,
-            task.start_date.isoformat(),
-            task.end_date.isoformat(),
-            ", ".join(task.predecessors),
-        ]
-        for column_index, value in enumerate(row_values, start=1):
-            worksheet.cell(row=row_index, column=column_index, value=value)
+        worksheet.cell(row=row_index, column=1, value=task.id)
+        worksheet.cell(row=row_index, column=2, value=task.title)
+        worksheet.cell(row=row_index, column=3, value=task.description)
+        worksheet.cell(row=row_index, column=4, value=task.assignee)
+        worksheet.cell(row=row_index, column=5, value=task.duration_days)
+
+        start_cell = worksheet.cell(
+            row=row_index, column=_COL_START, value=task.start_date
+        )
+        start_cell.number_format = "YYYY-MM-DD"
+
+        end_formula = (
+            f"={get_column_letter(_COL_START)}{row_index}"
+            f"+{get_column_letter(_COL_DURATION)}{row_index}"
+        )
+        end_cell = worksheet.cell(
+            row=row_index, column=_COL_END, value=end_formula
+        )
+        end_cell.number_format = "YYYY-MM-DD"
+
+        pred_text = ", ".join(task.predecessors)
+        worksheet.cell(row=row_index, column=8, value=pred_text)
 
     buffer = io.BytesIO()
     workbook.save(buffer)
