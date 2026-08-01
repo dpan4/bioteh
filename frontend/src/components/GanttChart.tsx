@@ -68,6 +68,8 @@ function formatDateFull(iso: string): string {
 export const GanttChart: FC<GanttChartProps> = ({ tasks, loading }) => {
   const [selectedTask, setSelectedTask] = useState<GanttTask | null>(null);
 
+  console.log("[GanttChart] Рендер с", tasks.length, "задачами, loading:", loading);
+
   if (loading) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: 300, color: "#8a8aaa", fontSize: 15 }}>

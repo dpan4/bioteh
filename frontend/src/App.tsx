@@ -4,6 +4,8 @@ import { ChatPanel } from "./components/ChatPanel";
 import { FileUpload } from "./components/FileUpload";
 import { GanttChart } from "./components/GanttChart";
 import { Toast } from "./components/Toast";
+import { UndoRedoControls } from "./components/UndoRedoControls";
+import { useTasks } from "./hooks/useTasks";
 import type { GanttTask } from "./schemas/task";
 
 const styles = {
@@ -69,7 +71,7 @@ const styles = {
 };
 
 export default function App() {
-  const [tasks, setTasks] = useState<GanttTask[]>([]);
+  const { tasks, canUndo, canRedo, setTasks, undo, redo } = useTasks([]);
   const [loading, setLoading] = useState(true);
   const [toasts, setToasts] = useState<{ id: number; message: string }[]>([]);
   const [toastId, setToastId] = useState(0);
@@ -88,8 +90,10 @@ export default function App() {
   }, []);
 
   const handleTasksUpdate = useCallback((newTasks: GanttTask[]) => {
+    console.log("[App] handleTasksUpdate вызван с", newTasks.length, "задачами:", newTasks);
     setTasks(newTasks);
-  }, []);
+    console.log("[App] setTasks выполнен");
+  }, [setTasks]);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,7 +121,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [showError]);
+  }, [showError, setTasks]);
 
   return (
     <div style={styles.app}>
@@ -129,6 +133,12 @@ export default function App() {
             ? `${tasks.length} задач в проекте`
             : "Управление проектом через AI"}
         </span>
+        <UndoRedoControls
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={undo}
+          onRedo={redo}
+        />
       </header>
 
       {/* Основная область */}

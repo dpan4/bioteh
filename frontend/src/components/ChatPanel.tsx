@@ -142,15 +142,25 @@ export const ChatPanel: FC<ChatPanelProps> = ({ onTaskUpdate, onError }) => {
     setLoading(true);
 
     try {
+      console.log("[ChatPanel] Отправка сообщения:", text);
       const result = await sendChatMessage(text);
+      console.log("[ChatPanel] Получен ответ:", {
+        reply: result.reply,
+        tasksCount: result.tasks.length,
+        tasks: result.tasks
+      });
+      
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: result.reply || "Готово. Расписание обновлено." },
       ]);
-      if (result.tasks.length > 0) {
-        onTaskUpdate(result.tasks);
-      }
+      
+      // Всегда обновляем задачи, даже если массив пустой (для корректного отображения)
+      console.log("[ChatPanel] Вызов onTaskUpdate с", result.tasks.length, "задачами");
+      onTaskUpdate(result.tasks);
+      console.log("[ChatPanel] onTaskUpdate выполнен");
     } catch (err) {
+      console.error("[ChatPanel] Ошибка:", err);
       const errMsg = err instanceof Error ? err.message : "Ошибка при обращении к AI";
       setMessages((prev) => [
         ...prev,
