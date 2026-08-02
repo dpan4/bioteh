@@ -91,3 +91,4 @@ bal.py
 promt/
 google.py
  — копия.env
+*.json

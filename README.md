@@ -381,6 +381,40 @@ bioteh/
 
 ---
 
+## Тестирование
+
+### Запуск тестов
+
+```bash
+cd backend
+python -m pytest tests/test_agent_evals.py -v
+```
+
+### Тесты MCP-инструментов
+
+Тесты находятся в `backend/tests/test_agent_evals.py` и проверяют корректность Tool Calling через реальные логи:
+
+- `test_tool_call_name_matches` — проверяет, что имя инструмента в логе совпадает с ожидаемым.
+- `test_task_store_final_state` — проверяет, что после выполнения tool call состояние TaskStore соответствует ожидаемому (длина массива задач, отсутствие ошибок).
+
+### Добавление новых тест-кейсов
+
+1. Создайте JSON-лог в `backend/tests/eval_cases/`:
+
+```json
+{
+  "user_message": "Диаграмма",
+  "tasks_before": [{"id": "task-1", "title": "Задача 1", "assignee": "", "durationDays": 1, "predecessors": [], "startDate": "2026-08-02", "endDate": "2026-08-02"}],
+  "tool_calls": [{"round": 1, "tool": "add_new_task", "arguments": {"title": "Новая задача", "assignee": "Алексей", "duration_days": 2, "predecessors": ["task-1"]}}],
+  "tasks_after": [{"id": "task-1", ...}, {"id": "task-4", ...}],
+  "error": null
+}
+```
+
+2. Запустите тесты — автоматически подхватятся новые кейсы.
+
+---
+
 ## Лицензия
 
 MIT
