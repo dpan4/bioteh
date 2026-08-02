@@ -304,6 +304,9 @@ delete_tasks(
 | `update_task_details` | `task_id` (обяз.), `title?`, `description?`, `assignee?`, `duration_days?`, `predecessors?` | `list[GanttTask]` (все задачи) | задача не найдена; предшественник не найден; ссылка на себя; `CyclicDependencyError`; `duration_days < 1` |
 | `add_new_task` | `title` (обяз.), `description?`, `assignee?`, `duration_days?`, `predecessors?` | `list[GanttTask]` (все задачи, включая новую) | предшественник не найден; `CyclicDependencyError`; `duration_days < 1` |
 | `delete_tasks` | `task_ids` (обяз., непустой список) | `list[GanttTask]` (оставшиеся задачи) | задача не найдена (атомарный отказ); пустой `task_ids` |
+| `set_project_start_date` | `project_start_date` (обяз., ISO `YYYY-MM-DD`) | `list[GanttTask]` (все задачи) | неверный формат даты; `CyclicDependencyError` |
+
+> ⚠️ `set_project_start_date` **строго запрещён** для сдвига отдельных задач. Используйте `duration_days` и `predecessors`. Инструмент вызывается **только** при явном запросе сдвинуть старт *всего проекта*.
 
 ---
 

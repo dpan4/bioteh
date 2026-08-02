@@ -52,9 +52,8 @@ class UpdateTaskParams(BaseModel):
     assignee: str | None = Field(
         default=None,
         description=(
-            'Имя исполнителя задачи. '
-            'Если нужно СНЯТЬ/УДАЛИТЬ исполнителя с задачи (например, "удалить Анну из task-1") — '
-            'передавай ПУСТУЮ СТРОКУ "" (не null, а именно пустую строку)! '
+            'Имя исполнителя задачи (например, "Дмитрий Пан"). '
+            'Для снятия исполнителя передавай assignee: "" (пустая строка). '
             'Если менять исполнителя не нужно — не передавай этот параметр вообще (оставь null). '
             'Пример назначения: "Дмитрий Пан". '
             'Пример снятия: ""'
@@ -121,6 +120,7 @@ class DeleteTasksParams(BaseModel):
     task_ids: list[str] = Field(
         min_length=1,
         description=(
+            'Удаляет задачу ИЗ ГРАФА полностью. Не использовать для очистки исполнителя! '
             'Список ID задач, которые нужно ПОЛНОСТЬЮ УДАЛИТЬ ИЗ ПРОЕКТА. '
             'ИСПОЛЬЗУЙ ЭТОТ ИНСТРУМЕНТ ТОЛЬКО если пользователь явно просит УДАЛИТЬ/УБРАТЬ ЗАДАЧУ целиком! '
             'ЗАПРЕЩЕНО использовать для смены или удаления исполнителя — для этого используй update_task_details с assignee=""! '
@@ -133,6 +133,24 @@ class DeleteTasksParams(BaseModel):
             'Пример: ["task-5", "task-6"]'
         ),
         examples=[["task-5", "task-6"]],
+    )
+
+
+class SetProjectStartDateParams(BaseModel):
+    """Параметры инструмента set_project_start_date."""
+
+    project_start_date: str = Field(
+        min_length=10,
+        max_length=10,
+        description=(
+            'Строгое правило: СТРОГО ЗАПРЕЩЕНО вызывать set_project_start_date, '
+            'если пользователь явно не попросил «Сдвинь старт всего проекта на X дату». '
+            'Для сдвига отдельных задач используй только duration_days и predecessors! '
+            'Этот инструмент сдвигает БАЗОВУЮ дату ВСЕГО ПРОЕКТА и пересчитывает '
+            'все задачи. Его НЕЛЬЗЯ использовать чтобы подогнать дату одной задачи. '
+            'Формат ISO: YYYY-MM-DD. Пример: "2026-08-01"'
+        ),
+        examples=["2026-08-01"],
     )
 
 
@@ -174,6 +192,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "name": "delete_tasks",
             "description": (
                 "ПОЛНОСТЬЮ УДАЛИТЬ одну или несколько ЗАДАЧ из проекта. "
+                "Удаляет задачу ИЗ ГРАФА полностью. Не использовать для очистки исполнителя! "
                 "КРИТИЧЕСКИ ВАЖНО: ИСПОЛЬЗУЙ ЭТОТ ИНСТРУМЕНТ ТОЛЬКО если пользователь явно просит "
                 "УДАЛИТЬ/УБРАТЬ ЗАДАЧУ ЦЕЛИКОМ из проекта! "
                 "ЗАПРЕЩЕНО использовать для смены или удаления исполнителя — для этого есть "
@@ -187,6 +206,22 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "«Удали Анну из task-1» → используй update_task_details(task_id='task-1', assignee='')."
             ),
             "parameters": DeleteTasksParams.model_json_schema(),
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_project_start_date",
+            "description": (
+                "Сдвинуть БАЗОВУЮ дату старта ВСЕГО ПРОЕКТА и пересчитать все задачи. "
+                "СТРОГО ЗАПРЕЩЕНО вызывать set_project_start_date, если пользователь "
+                "явно не попросил «Сдвинь старт всего проекта на X дату». "
+                "Для сдвига отдельных задач используй только duration_days и predecessors! "
+                "Этот инструмент влияет на все задачи сразу — используйте его ТОЛЬКО при "
+                "явном запросе сдвинуть весь проект. Даты после сдвига пересчитываются "
+                "DAG Scheduler. Пример: project_start_date='2026-08-05'"
+            ),
+            "parameters": SetProjectStartDateParams.model_json_schema(),
         },
     },
     {
@@ -328,23 +363,32 @@ def execute_add_new_task(
 
 
 def execute_delete_tasks(task_ids: list[str]) -> dict[str, Any]:
-    """Удаляет задачи атомарно: все или ничего.
+    """Удаляет задачи идемпотентно.
 
-    Осиротевшие ссылки в predecessors оставшихся задач очищаются.
-    После удаления даты оставшихся задач пересчитываются.
-
-    Архитектура §4.3: сигнатура соответствует контракту delete_tasks.
+    Если какая-то из задач уже не существует (удалена ранее),
+    мы НЕ возвращаем ошибку, а просто игнорируем её и возвращаем актуальный граф.
     """
     raw_tasks = store.get_raw_tasks()
     backup = [task.model_copy(deep=True) for task in raw_tasks]
 
     all_ids = {t.id for t in raw_tasks}
-    for tid in task_ids:
-        if tid not in all_ids:
-            return {"error": f"Задача с id '{tid}' не найдена. Операция отменена."}
+    
+    # Находим только те ID, которые реально есть в проекте
+    remove_set = set(task_ids) & all_ids
+    
+    # Если ни одной из указанных задач и так нет в проекте — 
+    # просто отдаём текущее расписание без ошибки
+    if not remove_set:
+        try:
+            scheduled = calculate_schedule(raw_tasks, store._project_start_date)
+            return {"tasks": _serialize_tasks(scheduled)}
+        except (CyclicDependencyError, ValueError) as exc:
+            return {"error": str(exc)}
 
-    remove_set = set(task_ids)
+    # Отфильтровываем удалённые задачи
     remaining = [t for t in raw_tasks if t.id not in remove_set]
+    
+    # Очищаем связи на удалённые задачи
     for task in remaining:
         task.predecessors = [p for p in task.predecessors if p not in remove_set]
 
@@ -355,6 +399,44 @@ def execute_delete_tasks(task_ids: list[str]) -> dict[str, Any]:
         return {"error": str(exc)}
 
     store._raw_tasks = remaining
+    return {"tasks": _serialize_tasks(scheduled)}
+
+
+def execute_set_project_start_date(project_start_date: str) -> dict[str, Any]:
+    """Сдвигает базовую дату проекта и пересчитывает все задачи.
+
+    Этот инструмент должен вызываться ТОЛЬКО при явном запросе пользователя
+    сдвинуть весь проект. Для сдвига отдельных задач используйте
+    duration_days и predecessors (system.md, инвариант 1).
+
+    Args:
+        project_start_date: Базовая дата в ISO-формате (YYYY-MM-DD).
+
+    Returns:
+        Словарь с ключом "tasks" (пересчитанный GanttTask[]) или "error".
+    """
+    from datetime import datetime
+
+    try:
+        new_start = datetime.strptime(project_start_date, "%Y-%m-%d").date()
+    except ValueError:
+        return {
+            "error": (
+                f"Неверный формат даты '{project_start_date}'. "
+                "Ожидается ISO-формат YYYY-MM-DD, например: 2026-08-01."
+            )
+        }
+
+    raw_tasks = store.get_raw_tasks()
+    backup_date = store._project_start_date
+
+    try:
+        scheduled = calculate_schedule(raw_tasks, new_start)
+    except (CyclicDependencyError, ValueError) as exc:
+        store._project_start_date = backup_date
+        return {"error": str(exc)}
+
+    store._project_start_date = new_start
     return {"tasks": _serialize_tasks(scheduled)}
 
 
@@ -410,6 +492,7 @@ def _normalize_arguments(
         "taskId": "task_id",
         "durationDays": "duration_days",
         "taskIds": "task_ids",
+        "projectStartDate": "project_start_date",
     }
 
     normalized = {}
@@ -439,7 +522,7 @@ def execute_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     структурированный ответ {"error": "..."} вместо пробрасывания исключения.
 
     Args:
-        name: Имя инструмента (update_task_details, add_new_task, delete_tasks, get_excel_template).
+        name: Имя инструмента (update_task_details, add_new_task, delete_tasks, set_project_start_date, get_excel_template).
         arguments: Словарь аргументов, полученный от LLM (может быть camelCase).
 
     Returns:
@@ -458,6 +541,10 @@ def execute_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "delete_tasks":
             validated_args = _normalize_arguments(arguments, DeleteTasksParams)
             return execute_delete_tasks(**validated_args)
+
+        if name == "set_project_start_date":
+            validated_args = _normalize_arguments(arguments, SetProjectStartDateParams)
+            return execute_set_project_start_date(**validated_args)
 
         if name == "get_excel_template":
             return execute_get_excel_template()
