@@ -108,9 +108,10 @@ export default function App() {
   // При каждом изменении tasks (включая undo/redo) синхронизируем бэкенд,
   // чтобы AI всегда видел актуальное состояние проекта.
   // useRef предотвращает параллельные запросы и бесконечный цикл.
+  // ВАЖНО: Пустой массив — валидное состояние (очистка проекта), его тоже нужно синхронизировать!
   const syncInFlight = useRef(false);
   useEffect(() => {
-    if (loading || tasks.length === 0) return;
+    if (loading) return;
     if (syncInFlight.current) return;
     syncInFlight.current = true;
     syncTasksWithBackend(tasks)

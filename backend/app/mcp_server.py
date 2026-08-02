@@ -180,6 +180,11 @@ class SetProjectStartDateParams(BaseModel):
     )
 
 
+class ClearAllTasksParams(BaseModel):
+    """Параметры инструмента clear_all_tasks (аргументы не требуются)."""
+    pass
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Дефиниции инструментов в формате OpenRouter function calling
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -248,6 +253,18 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "DAG Scheduler. Пример: project_start_date='2026-08-05'"
             ),
             "parameters": SetProjectStartDateParams.model_json_schema(),
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "clear_all_tasks",
+            "description": (
+                "ПОЛНОСТЬЮ ОЧИСТИТЬ таблицу задач. Удаляет АБСОЛЮТНО ВСЕ задачи из текущего проекта. "
+                "Используй этот инструмент ТОЛЬКО тогда, когда пользователь явно просит "
+                "«очисти таблицу», «удали все задачи», «стереть всё» или «сбросить текущий план»."
+            ),
+            "parameters": ClearAllTasksParams.model_json_schema(),
         },
     },
     {
@@ -475,6 +492,21 @@ def execute_set_project_start_date(project_start_date: str) -> dict[str, Any]:
     return {"tasks": _serialize_tasks(scheduled)}
 
 
+def execute_clear_all_tasks() -> dict[str, Any]:
+    """Полностью очищает хранилище задач проекта, удаляя все записи.
+
+    Архитектура §4: инструмент UI-агностичен и возвращает пустой список задач.
+
+    Returns:
+        Словарь с ключом "tasks" (пустой список []).
+    """
+    # Полностью затираем задачи в in-memory хранилище
+    store._raw_tasks = []
+    
+    # Возвращаем пустой массив задач в корректном формате
+    return {"tasks": []}
+
+
 def execute_get_excel_template() -> dict[str, Any]:
     """Возвращает эталонный Excel-шаблон для заполнения проекта (5 колонок).
 
@@ -497,6 +529,31 @@ def execute_get_excel_template() -> dict[str, Any]:
         }
     except Exception as exc:
         return {"error": f"Не удалось сформировать шаблон Excel: {exc}"}
+    try:
+        template_bytes = generate_template_excel()
+        template_b64 = base64.b64encode(template_bytes).decode("utf-8")
+        return {
+            "template": template_b64,
+            "filename": "gantt_template.xlsx",
+            "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
+    except Exception as exc:
+        return {"error": f"Не удалось сформировать шаблон Excel: {exc}"}
+
+
+def execute_clear_all_tasks() -> dict[str, Any]:
+    """Полностью очищает хранилище задач проекта, удаляя все записи.
+
+    Архитектура §4: инструмент UI-агностичен и возвращает пустой список задач.
+
+    Returns:
+        Словарь с ключом "tasks" (пустой список []).
+    """
+    # Полностью затираем задачи в in-memory хранилище
+    store._raw_tasks = []
+    
+    # Возвращаем пустой массив задач в корректном формате
+    return {"tasks": []}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -581,6 +638,11 @@ def execute_tool_call(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "set_project_start_date":
             validated_args = _normalize_arguments(arguments, SetProjectStartDateParams)
             return execute_set_project_start_date(**validated_args)
+
+        if name == "clear_all_tasks":
+            # Валидируем пустые аргументы для соблюдения строгого контракта
+            _normalize_arguments(arguments, ClearAllTasksParams)
+            return execute_clear_all_tasks()
 
         if name == "get_excel_template":
             return execute_get_excel_template()
