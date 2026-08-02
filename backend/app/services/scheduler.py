@@ -202,7 +202,19 @@ def calculate_schedule(
                 end_dates_by_id[predecessor_id]
                 for predecessor_id in task.predecessors
             )
-            start_date = predecessor_max_end + timedelta(days=1)
+            calculated_start = predecessor_max_end + timedelta(days=1)
+            
+            # 🔥 НОВАЯ ЛОГИКА: Учитываем preferred_start_date даже при наличии предшественников
+            # Если пользователь задал желаемую дату — берем максимум между ней и датой после предшественников
+            if task.preferred_start_date:
+                try:
+                    preferred = date.fromisoformat(task.preferred_start_date)
+                    start_date = max(calculated_start, preferred)
+                except ValueError:
+                    start_date = calculated_start
+            else:
+                start_date = calculated_start
+                
         elif task.preferred_start_date:
             # Задача без предшественников, но с указанной желаемой датой начала.
             try:

@@ -87,9 +87,10 @@ class UpdateTaskParams(BaseModel):
         max_length=10,
         description=(
             'Желаемая дата начала задачи (YYYY-MM-DD). '
-            'Используй ТОЛЬКО когда задача БЕЗ предшественников и пользователь явно указал дату '
-            '(например, «начни 4 сентября», «старт 2026-09-04»). '
-            'Если у задачи есть предшественники — поле игнорируется. '
+            'Используй когда пользователь явно указал дату начала '
+            '(например, «начни 4 сентября», «поставь на 2026-09-04»). '
+            '⛔ ЗАПРЕЩЕНО создавать фейковые задачи-заглушки или манипулировать predecessors для сдвига даты! '
+            'Если у задачи есть predecessors — дата рассчитывается как max(дата_окончания_предшественников, preferred_start_date). '
             'Пример: "2026-09-04"'
         ),
         examples=["2026-09-04"],
@@ -131,9 +132,10 @@ class AddTaskParams(BaseModel):
         max_length=10,
         description=(
             'Желаемая дата начала задачи (YYYY-MM-DD). '
-            'Используй ТОЛЬКО когда задача БЕЗ предшественников (predecessors=[]) '
-            'и пользователь явно указал дату (например, «начни 4 сентября», «старт 2026-09-04»). '
-            'Если указаны предшественники — поле игнорируется. '
+            'Используй когда пользователь явно указал дату начала '
+            '(например, «начни 4 сентября», «создай на 2026-09-04»). '
+            '⛔ ЗАПРЕЩЕНО создавать фейковые задачи-заглушки или манипулировать predecessors для сдвига даты! '
+            'Если у задачи есть predecessors — дата рассчитывается как max(дата_окончания_предшественников, preferred_start_date). '
             'Пример: "2026-09-04"'
         ),
         examples=["2026-09-04"],
@@ -341,10 +343,9 @@ def execute_update_task_details(
         target.predecessors = list(predecessors)
 
     if preferred_start_date is not None:
-        if target.predecessors:
-            target.preferred_start_date = None
-        else:
-            target.preferred_start_date = preferred_start_date
+        # 🔥 НОВАЯ ЛОГИКА: Сохраняем preferred_start_date даже при наличии predecessors
+        # Scheduler теперь учитывает его как ограничение снизу (max constraint)
+        target.preferred_start_date = preferred_start_date
 
     try:
         scheduled = calculate_schedule(raw_tasks, store._project_start_date)
@@ -400,7 +401,9 @@ def execute_add_new_task(
         assignee=assignee,
         duration_days=duration_days,
         predecessors=predecessors,
-        preferred_start_date=preferred_start_date if not predecessors else None,
+        # 🔥 НОВАЯ ЛОГИКА: Сохраняем preferred_start_date даже при наличии predecessors
+        # Scheduler теперь учитывает его как ограничение снизу (max constraint)
+        preferred_start_date=preferred_start_date,
     )
     raw_tasks.append(new_task)
 
