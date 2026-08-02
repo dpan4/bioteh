@@ -1,7 +1,8 @@
-"""Мультипровайдерный LLM-клиент на базе официального SDK openai.
+"""Мультипровайдерный LLM-клиент с поддержкой Google Gemini и OpenAI-совместимых API.
 
-Работает с любым OpenAI-совместимым API:
-  OpenRouter, OpenAI, DeepSeek Direct, Ollama, LM Studio, Groq.
+Маршрутизация:
+  - Модели с "gemini" в имени → официальный SDK google-genai
+  - Все остальные провайдеры → AsyncOpenAI (OpenRouter, OpenAI, DeepSeek, Groq, Ollama)
 
 Логика провайдера задаётся через переменные окружения (через python-dotenv в main.py).
 
@@ -11,11 +12,12 @@
     Формат ответа строго совместим с циклом Tool Calling в routers/chat.py.
 
 Конфигурация из переменных окружения (.env):
-  LLM_API_KEY     — ключ API (обязательный).
+  LLM_API_KEY     — ключ API для OpenAI-совместимых провайдеров.
   LLM_MODEL       — идентификатор модели (обязательный).
   LLM_BASE_URL    — base_url для AsyncOpenAI (default: "https://openrouter.ai/api/v1").
   LLM_MAX_TOKENS  — лимит токенов ответа (default: 4096).
   LLM_TEMPERATURE — температура генерации (default: 0.1).
+  GEMINI_API_KEY  — ключ Google API (обязательный для моделей gemini-*).
 
 Для обратной совместимости также читаются OPENROUTER_API_KEY, OPENROUTER_MODEL,
 OPENROUTER_MAX_TOKENS, OPENROUTER_BASE_URL — они используются как fallback,
@@ -31,6 +33,13 @@ from pathlib import Path
 from typing import Any
 
 from openai import AsyncOpenAI
+
+try:
+    from google import genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+    genai = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -131,30 +140,106 @@ def _resolve_temperature() -> float:
     return DEFAULT_TEMPERATURE
 
 
-class LLMClient:
-    """Мультипровайдерный LLM-клиент на базе openai.AsyncOpenAI.
+def _resolve_gemini_api_key() -> str:
+    """Извлекает ключ Google Gemini API (GEMINI_API_KEY).
 
-    Инициализируется с base_url и api_key, благодаря чему работает с любым
-    OpenAI-совместимым API.
+    Returns:
+        Ключ API Google Gemini.
+
+    Raises:
+        ValueError: Если переменная не задана.
+    """
+    key = _env("GEMINI_API_KEY")
+    if not key:
+        raise ValueError(
+            "Не задан GEMINI_API_KEY для модели Gemini. "
+            "Укажите ключ в переменных окружения или создайте файл .env с переменной GEMINI_API_KEY."
+        )
+    return key
+
+
+def _is_gemini_model(model: str) -> bool:
+    """Проверяет, является ли модель Gemini по имени.
+
+    Args:
+        model: Идентификатор модели.
+
+    Returns:
+        True если модель Gemini, иначе False.
+    """
+    return "gemini" in model.lower()
+
+
+def _strip_examples_from_schema(schema: Any) -> Any:
+    """Рекурсивно удаляет поля 'examples' и 'example' из JSON-схемы.
+
+    Google Gemini выдает ошибку валидации 400 при наличии этих полей
+    в параметрах инструментов. Другие провайдеры (OpenAI, DeepSeek, Groq)
+    эти поля поддерживают, поэтому фильтрация применяется только для Gemini.
+
+    Args:
+        schema: Словарь, список или примитивное значение JSON-схемы.
+
+    Returns:
+        Очищенная копия схемы без полей 'examples' и 'example'.
+    """
+    if isinstance(schema, dict):
+        # Создаем новый словарь без фильтруемых ключей
+        cleaned = {k: _strip_examples_from_schema(v) for k, v in schema.items() 
+                   if k not in ("examples", "example")}
+        return cleaned
+    elif isinstance(schema, list):
+        # Рекурсивно очищаем каждый элемент списка
+        return [_strip_examples_from_schema(item) for item in schema]
+    else:
+        # Примитивные значения (str, int, bool, None) возвращаем как есть
+        return schema
+
+
+class LLMClient:
+    """Мультипровайдерный LLM-клиент с поддержкой Google Gemini и OpenAI-совместимых API.
+
+    Маршрутизация:
+      - Модели с "gemini" в имени → официальный SDK google-genai
+      - Все остальные провайдеры → AsyncOpenAI (OpenRouter, OpenAI, DeepSeek, Groq)
 
     Attributes:
         model: Идентификатор LLM-модели (из LLM_MODEL, обязательный).
         max_tokens: Лимит токенов ответа.
         temperature: Степень креативности (0.0–2.0).
-        _client: openai.AsyncOpenAI — асинхронный HTTP-клиент.
+        _client: openai.AsyncOpenAI — асинхронный HTTP-клиент (для не-Gemini моделей).
+        _google_client: google.genai.Client — клиент Google (для Gemini моделей).
+        _is_gemini: bool — флаг использования Gemini.
     """
 
     def __init__(self) -> None:
-        base_url = _resolve_base_url()
-        api_key = _resolve_api_key()
         self.model = _resolve_model()
         self.max_tokens = _resolve_max_tokens()
         self.temperature = _resolve_temperature()
-        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
-        logger.info(
-            "[LLMClient] Model='%s', BaseURL='%s', Temp=%.2f, MaxTokens=%d",
-            self.model, base_url, self.temperature, self.max_tokens,
-        )
+        self._is_gemini = _is_gemini_model(self.model)
+
+        if self._is_gemini:
+            if not GENAI_AVAILABLE:
+                raise ValueError(
+                    "Библиотека google-genai не установлена. "
+                    "Установите: pip install google-genai"
+                )
+            gemini_api_key = _resolve_gemini_api_key()
+            self._google_client = genai.Client(api_key=gemini_api_key)  # type: ignore[union-attr]
+            self._client = None
+            logger.info(
+                "[LLMClient] Gemini Mode: Model='%s', Temp=%.2f, MaxTokens=%d",
+                self.model, self.temperature, self.max_tokens,
+            )
+        else:
+            base_url = _resolve_base_url()
+            api_key = _resolve_api_key()
+            self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+            self._google_client = None
+            logger.info(
+                "[LLMClient] OpenAI Mode: Model='%s', BaseURL='%s', Temp=%.2f, MaxTokens=%d",
+                self.model, base_url, self.temperature, self.max_tokens,
+            )
 
     def build_system_message(
         self, current_tasks: list[dict[str, Any]] | None = None
@@ -218,7 +303,102 @@ class LLMClient:
             openai.APIError: Если провайдер вернул ошибку HTTP.
             ValueError: Если ответ не удалось распарсить.
         """
-        response = await self._client.chat.completions.create(
+        if self._is_gemini:
+            return await self._chat_gemini(messages, tools)
+        return await self._chat_openai(messages, tools)
+
+    async def _chat_gemini(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Обращение к Google Gemini через официальный SDK google-genai.
+
+        Конвертирует формат OpenAI messages в формат Google SDK.
+        """
+        from google.genai import types
+
+        system_instruction = ""
+        contents = []
+
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "system":
+                system_instruction = content
+            elif role == "user":
+                contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=content)]
+                ))
+            elif role == "assistant":
+                if content:
+                    contents.append(types.Content(
+                        role="model",
+                        parts=[types.Part.from_text(text=content)]
+                    ))
+            elif role == "tool":
+                contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=f"Tool result: {content}")]
+                ))
+
+        genai_tools = []
+        if tools:
+            for tool in tools:
+                func = tool.get("function", {})
+                # Очищаем параметры от полей 'examples' и 'example' для Gemini
+                parameters = _strip_examples_from_schema(func.get("parameters", {}))
+                genai_tools.append(types.Tool(
+                    function_declarations=[types.FunctionDeclaration(
+                        name=func.get("name", ""),
+                        description=func.get("description", ""),
+                        parameters=parameters,
+                    )]
+                ))
+
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction if system_instruction else None,
+            temperature=self.temperature,
+            max_output_tokens=self.max_tokens,
+            tools=genai_tools if genai_tools else None,
+        )
+
+        response = self._google_client.models.generate_content(  # type: ignore[union-attr]
+            model=self.model,
+            contents=contents,
+            config=config,
+        )
+
+        reply = ""
+        tool_calls: list[dict[str, Any]] = []
+
+        if response.candidates:
+            candidate = response.candidates[0]
+            if candidate.content and candidate.content.parts:
+                for part in candidate.content.parts:
+                    if part.text:
+                        reply += part.text
+                    if part.function_call:
+                        args = {}
+                        if part.function_call.args:
+                            args = dict(part.function_call.args)
+                        tool_calls.append({
+                            "id": f"gemini-{len(tool_calls)}",
+                            "name": part.function_call.name or "",
+                            "arguments": args,
+                        })
+
+        return {"reply": reply, "tool_calls": tool_calls}
+
+    async def _chat_openai(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Обращение к OpenAI-совместимому API через AsyncOpenAI."""
+        response = await self._client.chat.completions.create(  # type: ignore[union-attr]
             model=self.model,
             messages=messages,  # type: ignore[arg-type]
             tools=tools if tools else [],  # type: ignore[arg-type]
@@ -253,8 +433,11 @@ class LLMClient:
         return {"reply": reply, "tool_calls": tool_calls}
 
     async def close(self) -> None:
-        """Закрывает HTTP-клиент."""
-        await self._client.close()
+        """Закрывает HTTP-клиенты."""
+        if self._client:
+            await self._client.close()
+        if self._google_client:
+            pass  # google-genai клиент не требует явного закрытия
 
 
 _client_instance: LLMClient | None = None
