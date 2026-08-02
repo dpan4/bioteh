@@ -259,13 +259,14 @@ export async function syncTasksWithBackend(
   tasks: GanttTask[],
 ): Promise<GanttTask[]> {
   // Отправляем только поля RawTask (без startDate/endDate) — бэкенд пересчитает даты
-  const rawTasks = tasks.map(({ id, title, description, assignee, durationDays, predecessors }) => ({
+  const rawTasks = tasks.map(({ id, title, description, assignee, durationDays, predecessors, preferredStartDate }) => ({
     id,
     title,
     description,
     assignee,
     durationDays,
     predecessors,
+    preferredStartDate: preferredStartDate ?? null,
   }));
 
   return fetchValidated("/tasks/sync", GanttTaskArraySchema, {

@@ -53,6 +53,14 @@ export const RawTaskSchema = z.object({
     .describe(
       'Список id задач-предшественников (может быть пустым массивом). Пример: ["task-1", "task-2"]'
     ),
+  preferredStartDate: z
+    .string()
+    .regex(ISO_DATE_REGEX)
+    .nullable()
+    .optional()
+    .describe(
+      'Желаемая дата начала задачи YYYY-MM-DD (только для задач без предшественников). Пример: "2026-09-04"'
+    ),
 });
 
 /**

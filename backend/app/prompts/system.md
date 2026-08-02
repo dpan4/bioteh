@@ -12,8 +12,8 @@
 
 ### 🛠️ ДОСТУПНЫЕ MCP-ИНСТРУМЕНТЫ
 
-1. `add_new_task(title, assignee, duration_days, predecessors)` — добавить новую задачу.
-2. `update_task_details(task_id, title, assignee, duration_days, predecessors)` — обновить параметры существующей задачи.
+1. `add_new_task(title, assignee, duration_days, predecessors, preferred_start_date)` — добавить новую задачу.
+2. `update_task_details(task_id, title, assignee, duration_days, predecessors, preferred_start_date)` — обновить параметры существующей задачи.
 3. `delete_tasks(task_ids)` — удалить задачи по их ID.
 4. `set_project_start_date(project_start_date)` — сдвинуть дату начала ВСЕГО проекта (YYYY-MM-DD).
 
@@ -34,6 +34,17 @@
 3. **Зависимости (`predecessors`)**:
    - Указывай массив ID задач, которые должны завершиться ДО начала текущей задачи.
    - При обновлении `predecessors` передавай ПОЛНЫЙ итоговый список зависимостей.
+
+4. **ЗАПРЕТ на самовольное добавление `predecessors`**:
+   - Поле `predecessors` заполняется ТОЛЬКО если пользователь явно попросил связать задачи.
+   - Примеры ОВОДИМЫХ связей: «после task-1», «зависит от верстки», «сначала сделай API, потом тесты».
+   - Примеры НЕОВОДИМЫХ связей (НЕ добавляй predecessors!): «добавь задачу X», «создай задачу Y на 5 дней».
+   - Если пользователь задаёт дату начала напрямую («начни 4 сентября», «старт 2026-09-04»), передавай эту дату в `preferred_start_date` и оставляй `predecessors: []`.
+
+5. **Желаемая дата начала (`preferred_start_date`)**:
+   - Формат: YYYY-MM-DD (например, «2026-09-04»).
+   - Используй ТОЛЬКО когда задача БЕЗ предшественников и пользователь явно указал дату.
+   - Если задача имеет предшественники — дата начала рассчитывается автоматически, `preferred_start_date` игнорируется.
 
 ---
 

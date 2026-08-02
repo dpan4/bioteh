@@ -70,6 +70,19 @@ class RawTask(BaseModel):
         ),
         examples=[["task-1", "task-2"]],
     )
+    preferred_start_date: str | None = Field(
+        default=None,
+        min_length=10,
+        max_length=10,
+        description=(
+            "Желаемая дата начала задачи в формате YYYY-MM-DD. "
+            "Используется ТОЛЬКО если задача не имеет предшественников (predecessors пуст). "
+            "Если указана — планировщик ставит задачу строго на эту дату. "
+            "Если задача имеет предшественники — поле игнорируется. "
+            'Пример: "2026-09-04"'
+        ),
+        examples=["2026-09-04"],
+    )
 
 
 class GanttTask(RawTask):

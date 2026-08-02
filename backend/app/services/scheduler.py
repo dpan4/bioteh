@@ -18,6 +18,8 @@ from datetime import date, timedelta
 
 from app.schemas.task import GanttTask, RawTask
 
+ISO_DATE_FMT = "%Y-%m-%d"
+
 
 class CyclicDependencyError(Exception):
     """Ошибка циклической зависимости в графе задач.
@@ -201,6 +203,15 @@ def calculate_schedule(
                 for predecessor_id in task.predecessors
             )
             start_date = predecessor_max_end + timedelta(days=1)
+        elif task.preferred_start_date:
+            # Задача без предшественников, но с указанной желаемой датой начала.
+            try:
+                preferred = date.fromisoformat(task.preferred_start_date)
+                # Берём максимум между желаемой датой и базовой датой проекта,
+                # чтобы задача не начиналась раньше старта проекта.
+                start_date = max(preferred, project_start_date)
+            except ValueError:
+                start_date = project_start_date
         else:
             start_date = project_start_date
         # end_date — последний день работы по задаче включительно.

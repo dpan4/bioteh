@@ -94,6 +94,7 @@ bioteh/
 | `assignee` | `assignee` | `string` / `str` | обязательное (может быть `""`) | Исполнитель задачи | `"Дмитрий Пан"` |
 | `durationDays` | `duration_days` | `number` (int ≥ 1) / `int` (`ge=1`) | обязательное | Длительность задачи в рабочих днях | `5` |
 | `predecessors` | `predecessors` | `string[]` / `list[str]` | обязательное (может быть `[]`) | Список `id` задач-предшественников | `["task-1", "task-2"]` |
+| `preferredStartDate` | `preferred_start_date` | `string` (ISO `YYYY-MM-DD`) / `str \| None` | опциональное (`None`) | Желаемая дата начала (только для задач без предшественников) | `"2026-09-04"` |
 
 ### 2.2. GanttTask — задача с рассчитанными датами
 

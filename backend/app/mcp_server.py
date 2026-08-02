@@ -81,6 +81,19 @@ class UpdateTaskParams(BaseModel):
         description='ПОЛНЫЙ новый список ID предшественников (замена, не добавление). Не передавайте, если менять не нужно. Пример: ["task-1"]',
         examples=[["task-1"]],
     )
+    preferred_start_date: str | None = Field(
+        default=None,
+        min_length=10,
+        max_length=10,
+        description=(
+            'Желаемая дата начала задачи (YYYY-MM-DD). '
+            'Используй ТОЛЬКО когда задача БЕЗ предшественников и пользователь явно указал дату '
+            '(например, «начни 4 сентября», «старт 2026-09-04»). '
+            'Если у задачи есть предшественники — поле игнорируется. '
+            'Пример: "2026-09-04"'
+        ),
+        examples=["2026-09-04"],
+    )
 
 
 class AddTaskParams(BaseModel):
@@ -111,6 +124,19 @@ class AddTaskParams(BaseModel):
         default_factory=list,
         description='Список ID задач-предшественников (может быть пустым). Пример: ["task-2", "task-4"]',
         examples=[["task-2", "task-4"]],
+    )
+    preferred_start_date: str | None = Field(
+        default=None,
+        min_length=10,
+        max_length=10,
+        description=(
+            'Желаемая дата начала задачи (YYYY-MM-DD). '
+            'Используй ТОЛЬКО когда задача БЕЗ предшественников (predecessors=[]) '
+            'и пользователь явно указал дату (например, «начни 4 сентября», «старт 2026-09-04»). '
+            'Если указаны предшественники — поле игнорируется. '
+            'Пример: "2026-09-04"'
+        ),
+        examples=["2026-09-04"],
     )
 
 
@@ -260,6 +286,7 @@ def execute_update_task_details(
     assignee: str | None = None,
     duration_days: int | None = None,
     predecessors: list[str] | None = None,
+    preferred_start_date: str | None = None,
 ) -> dict[str, Any]:
     """Обновляет поля существующей задачи.
 
@@ -296,6 +323,12 @@ def execute_update_task_details(
                 return {"error": f"Предшественник с id '{pred_id}' не найден среди задач проекта."}
         target.predecessors = list(predecessors)
 
+    if preferred_start_date is not None:
+        if target.predecessors:
+            target.preferred_start_date = None
+        else:
+            target.preferred_start_date = preferred_start_date
+
     try:
         scheduled = calculate_schedule(raw_tasks, store._project_start_date)
     except (CyclicDependencyError, ValueError) as exc:
@@ -312,6 +345,7 @@ def execute_add_new_task(
     assignee: str = "",
     duration_days: int = 1,
     predecessors: list[str] | None = None,
+    preferred_start_date: str | None = None,
 ) -> dict[str, Any]:
     """Добавляет новую задачу с автоматической генерацией ID.
 
@@ -349,6 +383,7 @@ def execute_add_new_task(
         assignee=assignee,
         duration_days=duration_days,
         predecessors=predecessors,
+        preferred_start_date=preferred_start_date if not predecessors else None,
     )
     raw_tasks.append(new_task)
 
@@ -493,6 +528,7 @@ def _normalize_arguments(
         "durationDays": "duration_days",
         "taskIds": "task_ids",
         "projectStartDate": "project_start_date",
+        "preferredStartDate": "preferred_start_date",
     }
 
     normalized = {}
