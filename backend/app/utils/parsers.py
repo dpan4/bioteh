@@ -152,7 +152,7 @@ def extract_dates_for_task(text: str, task_id: str) -> list[date]:
 def normalize_task_ids_in_args(args: dict[str, Any]) -> dict[str, Any]:
     """Исправляет опечатки вида 'tasl-5', 'task_5', 'таск-5' в 'task-5'."""
     id_pattern = re.compile(r'(?:task|tasl|task_|таск)[-_]?(\d+)', re.IGNORECASE)
-    new_args = args.copy()
+    new_args = args.copy() if args else {}
 
     for key in ("task_id", "task_ids", "predecessors"):
         if key not in new_args:

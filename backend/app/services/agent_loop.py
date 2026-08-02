@@ -132,8 +132,9 @@ async def run_tool_calling_loop(
         tool_calls = clean_and_sort_tools(tool_calls)
 
         if not tool_calls:
-            # Если инструменты не вызывались — берём текущее состояние из store
-            tasks = get_current_tasks()
+            # Если инструменты не вызывались — используем последний известный результат
+            # Пустой массив [] — валидное состояние (например, после clear_all_tasks)
+            tasks = last_tool_result_tasks if last_tool_result_tasks is not None else get_current_tasks()
             reply = ensure_russian_language(reply)
             return reply, tasks
 
