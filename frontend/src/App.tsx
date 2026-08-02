@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getTasks, syncTasksWithBackend } from "./api/client";
 import { ChatPanel } from "./components/ChatPanel";
 import { FileUpload } from "./components/FileUpload";
@@ -107,14 +107,24 @@ export default function App() {
 
   // При каждом изменении tasks (включая undo/redo) синхронизируем бэкенд,
   // чтобы AI всегда видел актуальное состояние проекта.
+  // useRef предотвращает параллельные запросы и бесконечный цикл.
+  const syncInFlight = useRef(false);
   useEffect(() => {
-    // Пропускаем синхронизацию во время первоначальной загрузки
-    if (loading) return;
-    syncTasksWithBackend(tasks).catch((err) => {
-      // Тихая ошибка — UI уже корректен, не нужен Toast
-      console.warn("[App] Синхронизация бэкенда не удалась:", err);
-    });
+    if (loading || tasks.length === 0) return;
+    if (syncInFlight.current) return;
+    syncInFlight.current = true;
+    syncTasksWithBackend(tasks)
+      .catch((err) => {
+        console.warn("[App] Синхронизация бэкенда не удалась:", err);
+      })
+      .finally(() => {
+        syncInFlight.current = false;
+      });
   }, [tasks, loading]);
+
+  // Ref для showError, чтобы не вызывать ре-рендер useEffect при каждом тосте
+  const showErrorRef = useRef(showError);
+  showErrorRef.current = showError;
 
   useEffect(() => {
     let cancelled = false;
@@ -127,7 +137,7 @@ export default function App() {
       })
       .catch((err) => {
         if (!cancelled) {
-          showError(
+          showErrorRef.current(
             err instanceof Error
               ? err.message
               : "Не удалось загрузить расписание",
@@ -142,7 +152,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [showError, setTasks]);
+  }, [setTasks]);
 
   return (
     <div style={styles.app}>

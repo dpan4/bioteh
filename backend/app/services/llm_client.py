@@ -10,11 +10,12 @@
   - async chat(messages, tools) -> {"reply": str, "tool_calls": list[dict]}
     Формат ответа строго совместим с циклом Tool Calling в routers/chat.py.
 
-Конфигурация из переменных окружения:
+Конфигурация из переменных окружения (.env):
+  LLM_API_KEY     — ключ API (обязательный).
+  LLM_MODEL       — идентификатор модели (обязательный).
   LLM_BASE_URL    — base_url для AsyncOpenAI (default: "https://openrouter.ai/api/v1").
-  LLM_API_KEY     — ключ API (обязателен).
-  LLM_MODEL       — идентификатор модели (default: "deepseek/deepseek-chat").
   LLM_MAX_TOKENS  — лимит токенов ответа (default: 4096).
+  LLM_TEMPERATURE — температура генерации (default: 0.1).
 
 Для обратной совместимости также читаются OPENROUTER_API_KEY, OPENROUTER_MODEL,
 OPENROUTER_MAX_TOKENS, OPENROUTER_BASE_URL — они используются как fallback,
@@ -24,15 +25,18 @@ OPENROUTER_MAX_TOKENS, OPENROUTER_BASE_URL — они используются �
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from openai import AsyncOpenAI
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "deepseek/deepseek-chat"
 DEFAULT_MAX_TOKENS = 4096
+DEFAULT_TEMPERATURE = 0.1
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system.md"
@@ -83,8 +87,18 @@ def _resolve_base_url() -> str:
 
 
 def _resolve_model() -> str:
-    """Извлекает модель (LLM_MODEL с fallback на OPENROUTER_MODEL)."""
-    return _env("LLM_MODEL") or _env("OPENROUTER_MODEL") or DEFAULT_MODEL
+    """Извлекает модель (LLM_MODEL с fallback на OPENROUTER_MODEL).
+
+    Raises:
+        ValueError: Если ни LLM_MODEL, ни OPENROUTER_MODEL не заданы в .env.
+    """
+    model = _env("LLM_MODEL") or _env("OPENROUTER_MODEL")
+    if not model:
+        raise ValueError(
+            "Переменная LLM_MODEL не задана в .env. "
+            "Укажите модель в формате: LLM_MODEL=deepseek/deepseek-chat"
+        )
+    return model
 
 
 def _resolve_max_tokens() -> int:
@@ -98,6 +112,25 @@ def _resolve_max_tokens() -> int:
     return DEFAULT_MAX_TOKENS
 
 
+def _resolve_temperature() -> float:
+    """Извлекает temperature (LLM_TEMPERATURE).
+
+    Диапазон: 0.0 (детерминированный) — 2.0 (максимально креативный).
+    По умолчанию 0.1 — баланс между точностью и разнообразием.
+
+    Returns:
+        Значение temperature от 0.0 до 2.0.
+    """
+    raw = _env("LLM_TEMPERATURE")
+    if raw:
+        try:
+            temp = float(raw)
+            return max(0.0, min(2.0, temp))
+        except ValueError:
+            pass
+    return DEFAULT_TEMPERATURE
+
+
 class LLMClient:
     """Мультипровайдерный LLM-клиент на базе openai.AsyncOpenAI.
 
@@ -105,8 +138,9 @@ class LLMClient:
     OpenAI-совместимым API.
 
     Attributes:
-        model: Идентификатор LLM-модели (из LLM_MODEL).
+        model: Идентификатор LLM-модели (из LLM_MODEL, обязательный).
         max_tokens: Лимит токенов ответа.
+        temperature: Степень креативности (0.0–2.0).
         _client: openai.AsyncOpenAI — асинхронный HTTP-клиент.
     """
 
@@ -115,7 +149,12 @@ class LLMClient:
         api_key = _resolve_api_key()
         self.model = _resolve_model()
         self.max_tokens = _resolve_max_tokens()
+        self.temperature = _resolve_temperature()
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        logger.info(
+            "[LLMClient] Model='%s', BaseURL='%s', Temp=%.2f, MaxTokens=%d",
+            self.model, base_url, self.temperature, self.max_tokens,
+        )
 
     def build_system_message(
         self, current_tasks: list[dict[str, Any]] | None = None
@@ -184,6 +223,7 @@ class LLMClient:
             messages=messages,  # type: ignore[arg-type]
             tools=tools if tools else [],  # type: ignore[arg-type]
             max_tokens=self.max_tokens,
+            temperature=self.temperature,
         )
 
         if not response.choices:
@@ -220,9 +260,14 @@ class LLMClient:
 _client_instance: LLMClient | None = None
 
 
-def get_client() -> LLMClient:
-    """Возвращает (и лениво создаёт) глобальный экземпляр LLMClient."""
+def get_client(force_reload: bool = False) -> LLMClient:
+    """Возвращает (и лениво создаёт) глобальный экземпляр LLMClient.
+
+    Args:
+        force_reload: Если True — принудительно пересоздаёт клиент
+            (полезно при смене .env без перезапуска сервера).
+    """
     global _client_instance
-    if _client_instance is None:
+    if force_reload or _client_instance is None:
         _client_instance = LLMClient()
     return _client_instance

@@ -9,8 +9,9 @@
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-# Загружаем переменные из .env в os.environ ДО импорта роутеров
-load_dotenv()
+# Загружаем переменные из .env в os.environ ДО импорта роутеров.
+# override=True гарантирует, что .env перебивает системные переменные окружения.
+load_dotenv(override=True)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
