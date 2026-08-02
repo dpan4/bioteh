@@ -110,6 +110,7 @@ async def run_tool_calling_loop(
     log_entry["tool_calls"] = []
 
     seen_signatures: set[tuple[tuple[str, str], ...]] = set()
+    last_tool_result_tasks: list[dict[str, object]] | None = None  # Результат последнего tool call
 
     for round_num in range(MAX_TOOL_CALL_ROUNDS):
         response = await client.chat(messages, TOOL_DEFINITIONS)
@@ -131,6 +132,7 @@ async def run_tool_calling_loop(
         tool_calls = clean_and_sort_tools(tool_calls)
 
         if not tool_calls:
+            # Если инструменты не вызывались — берём текущее состояние из store
             tasks = get_current_tasks()
             reply = ensure_russian_language(reply)
             return reply, tasks
@@ -147,7 +149,9 @@ async def run_tool_calling_loop(
                 f"Round {round_num + 1}: Зафиксирован повторный вызов тех же инструментов! "
                 "Прерываем цикл для предотвращения дублирования данных."
             )
-            tasks = get_current_tasks()
+            # 🔥 КРИТИЧНО: Используем результат последнего tool call, а не перечитываем store
+            # Пустой массив [] — валидное состояние после clear_all_tasks
+            tasks = last_tool_result_tasks if last_tool_result_tasks is not None else get_current_tasks()
             # Если у модели был текст — отдаем его, иначе стандартную заглушку
             final_reply = reply or "Изменения успешно внесены в расписание."
             return ensure_russian_language(final_reply), tasks
@@ -179,6 +183,12 @@ async def run_tool_calling_loop(
             try:
                 result = execute_tool_call(tc["name"], tc["arguments"])
                 logger.debug(f"Инструмент {tc['name']} выполнен успешно")
+                
+                # 🔥 КРИТИЧНО: Сохраняем результат последнего успешного tool call
+                # Пустой массив [] — это ВАЛИДНЫЙ результат (например, clear_all_tasks)
+                if "tasks" in result:
+                    last_tool_result_tasks = result["tasks"]
+                    
             except Exception as exc:
                 logger.error(
                     f"Ошибка при выполнении инструмента {tc['name']}: {exc}",
@@ -239,7 +249,9 @@ async def run_tool_calling_loop(
     logger.warning(
         f"Tool Calling Loop: достигнут лимит {MAX_TOOL_CALL_ROUNDS} итераций"
     )
-    tasks = get_current_tasks()
+    # 🔥 КРИТИЧНО: Используем результат последнего tool call вместо перечитывания store
+    # Пустой массив [] — валидное состояние после clear_all_tasks
+    tasks = last_tool_result_tasks if last_tool_result_tasks is not None else get_current_tasks()
     return (
         "Достигнут лимит итераций обработки. Пожалуйста, уточните запрос.",
         tasks,
