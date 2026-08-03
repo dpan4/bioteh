@@ -5,3 +5,4 @@ openai
 openpyxl
 python-dotenv
 google-genai
+python-multipart
