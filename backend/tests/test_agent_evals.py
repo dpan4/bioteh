@@ -54,16 +54,16 @@ def test_task_store_final_state(case_name, log_data):
 
         store.set_raw_tasks([RawTask(**rt) for rt in raw_tasks_before])
 
-    first_call = tool_calls[0]
-    tool_name = first_call["tool"]
-    arguments = first_call.get("arguments", {})
+    for call in tool_calls:
+        tool_name = call["tool"]
+        arguments = call.get("arguments", {})
 
-    result = execute_tool_call(tool_name, arguments)
+        result = execute_tool_call(tool_name, arguments)
 
-    assert "error" not in result, (
-        f"Tool call '{tool_name}' returned error in log '{case_name}': "
-        f"{result.get('error')}"
-    )
+        assert "error" not in result, (
+            f"Tool call '{tool_name}' returned error in log '{case_name}': "
+            f"{result.get('error')}"
+        )
 
     final_tasks = store.get_raw_tasks()
     assert len(final_tasks) == len(tasks_after), (
