@@ -130,7 +130,6 @@ LLM_TEMPERATURE=0.1
 Возвращаемся в корень проекта (где лежит наш docker-compose.yml) и поднимаем всю систему одной командой в фоне
 
 ```bash
-cd ..
 docker-compose up --build -d
 ```
 4. Проверка статуса
