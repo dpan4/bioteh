@@ -16,9 +16,9 @@
 | Frontend валидация | **Zod** | Runtime-валидация всех ответов API/LLM (`GanttTaskSchema.array().parse()`) |
 | Backend framework | **FastAPI** | REST API, async-эндпоинты, автогенерация OpenAPI |
 | Backend валидация | **Pydantic v2** | Схемы данных, aliases для snake_case ↔ camelCase, строгая валидация |
-| AI Tool Calling | **FastMCP** | MCP-сервер с инструментами мутации задач для LLM |
+| AI Tool Calling | **FastMCP** (бывший) → **собственный MCP-сервер** (`mcp_server.py`) | MCP-инструменты мутации задач для LLM, инструменты агностичны к UI |
 | Excel-парсинг | **openpyxl** | Чтение `.xlsx`-файлов с задачами проекта |
-| LLM-провайдер | **OpenRouter API** | Доступ к LLM для чата и Tool Calling (ключ через env `OPENROUTER_API_KEY`) |
+| LLM-провайдер | **Мультипровайдерный** (`llm_client.py`): Google Gemini (SDK `google-genai`) + OpenAI-совместимые API (`AsyncOpenAI`) | OpenRouter, OpenAI, DeepSeek, Groq, Ollama, Gemini; ключи через `LLM_API_KEY` / `GEMINI_API_KEY` |
 
 ### 1.2. Структура папок
 
@@ -32,50 +32,64 @@ bioteh/
 │
 ├── frontend/
 │   ├── index.html                   # Точка входа Vite
-│   ├── package.json                 # Зависимости: react, react-dom, zod
+│   ├── package.json                 # Зависимости: react, react-dom, zod, vite
+│   ├── package-lock.json
 │   ├── tsconfig.json                # strict: true
 │   ├── vite.config.ts               # Конфиг Vite + proxy на backend (/api -> :8000)
 │   └── src/
 │       ├── main.tsx                 # Bootstrap React-приложения
-│       ├── App.tsx                  # Корневой layout: GanttChart + ChatPanel
+│       ├── App.tsx                  # Корневой layout: GanttChart + ChatPanel + UndoRedoControls
 │       ├── schemas/
 │       │   └── task.ts              # Zod-схемы: RawTaskSchema, GanttTaskSchema (зеркало Pydantic)
 │       ├── api/
-│       │   └── client.ts            # HTTP-клиент: fetch + Zod-parse всех ответов, camelCase-маппинг
+│       │   └── client.ts            # HTTP-клиент: fetch + Zod-parse всех ответов
 │       ├── components/
 │       │   ├── GanttChart.tsx       # Рендер диаграммы Гантта из GanttTask[]
-│       │   ├── GanttRow.tsx         # Строка задачи (bar по startDate/endDate)
 │       │   ├── ChatPanel.tsx        # Чат с LLM (история сообщений, ввод)
 │       │   ├── FileUpload.tsx       # Загрузка Excel-файла (.xlsx)
-│       │   └── Toast.tsx            # Toast-уведомления об ошибках (валидация, сеть, циклы)
-│       ├── hooks/
-│       │   ├── useTasks.ts          # Состояние GanttTask[]: загрузка, обновление после мутаций
-│       │   └── useChat.ts           # Состояние чата: отправка сообщений, приём обновлённых задач
-│       └── utils/
-│           └── dates.ts             # Только форматирование ISO-дат для отображения (НЕ расчёт!)
+│       │   ├── TaskDetailModal.tsx  # Модалка деталей задачи (даты, исполнитель, зависимости)
+│       │   ├── Toast.tsx            # Toast-уведомления об ошибках (валидация, сеть, циклы)
+│       │   └── UndoRedoControls.tsx # Кнопки Undo/Redo с горячими клавишами Ctrl+Z/Y
+│       └── hooks/
+│           └── useTasks.ts          # Состояние GanttTask[]: загрузка, обновление, undo/redo
 │
 └── backend/
-    ├── pyproject.toml               # Зависимости: fastapi, uvicorn, pydantic>=2, fastmcp, openpyxl, httpx
-    ├── .env.example                 # OPENROUTER_API_KEY, OPENROUTER_MODEL
+    ├── requirements.txt             # Зависимости Python
+    ├── Dockerfile                   # Docker-конфиг для бэкенда
+    ├── data/                        # Персистентное хранилище tasks.json
+    ├── logs/                        # Логи чата (NDJSON, по папкам YYYY-MM-DD/)
+    ├── tests/                       # pytest + snapshot-тесты
     └── app/
         ├── __init__.py
         ├── main.py                  # FastAPI-приложение: CORS, роутеры, обработчики ошибок
-        ├── config.py                # Настройки из env (pydantic-settings)
+        ├── logger.py                # Цветной ANSI-логгер с тегами
+        ├── mcp_server.py            # MCP-сервер: TOOL_DEFINITIONS + execute_tool_call диспетчер
+        ├── prompts/
+        │   └── system.md            # Системный промпт для LLM с подстановкой задач
         ├── schemas/
         │   ├── __init__.py
         │   └── task.py              # Pydantic v2: RawTask, GanttTask (зеркало Zod), ChatRequest/Response
         ├── services/
         │   ├── __init__.py
         │   ├── scheduler.py         # DAG Scheduler — ЕДИНСТВЕННЫЙ источник расчёта дат
-        │   ├── excel_parser.py      # openpyxl: .xlsx -> RawTask[]
-        │   ├── seed.py              # Демо-набор RawTask[] для старта без Excel
-        │   ├── task_store.py        # In-memory хранилище RawTask[] (текущее состояние проекта)
-        │   └── llm_client.py        # httpx-клиент OpenRouter: chat completions + tool calling loop
+        │   ├── excel_parser.py      # openpyxl: .xlsx -> RawTask[] + генерация шаблонов
+        │   ├── task_store.py        # In-memory хранилище RawTask[] + персистентность в JSON
+        │   ├── llm_client.py        # Мультипровайдерный клиент: Google Gemini + AsyncOpenAI
+        │   ├── agent_loop.py        # Цикл Tool Calling с защитой от зацикливания и валидацией
+        │   ├── grounding.py         # Post-Tool и Post-Reply проверки дат (конфликты, заземление)
+        │   ├── request_parser.py    # Парсинг запросов: извлечение tool calls из естественного языка
+        │   └── utils/
+        │       ├── __init__.py
+        │       ├── logger.py        # Утилита NDJSON-логов чата (logs/YYYY-MM-DD/)
+        │       └── parsers.py       # Утилиты: извлечение дат, нормализация tool calls, языковой guard
         ├── routers/
         │   ├── __init__.py
-        │   ├── tasks.py             # GET /api/tasks, POST /api/tasks/upload (Excel)
-        │   └── chat.py              # POST /api/chat (User Chat -> LLM -> MCP tools -> GanttTask[])
-        └── mcp_server.py            # FastMCP-сервер: update_task_details, add_new_task, delete_tasks
+        │   ├── tasks.py             # GET /api/tasks, POST /upload, PUT /sync, GET /export, GET /template
+        │   └── chat.py              # POST /api/chat (Tool Calling Loop + grounding)
+        └── utils/
+            ├── __init__.py
+            ├── logger.py            # Утилитарный логгер
+            └── parsers.py           # Утилитарные парсеры (даты, месяцы)
 ```
 
 ---
@@ -166,7 +180,7 @@ Seed-данные ──> GET /api/tasks ──> seed.py ───────�
 
 Шаги:
 1. Пользователь загружает `.xlsx` через `FileUpload.tsx`, либо приложение при старте запрашивает seed-данные.
-2. `excel_parser.py` читает строки через openpyxl и строит `RawTask[]` (без дат); `seed.py` отдаёт демо-набор `RawTask[]`.
+2. `excel_parser.py` читает строки через openpyxl и строит `RawTask[]` (без дат); при пустом хранилище `task_store.py` автоматически подгружает seed-данные (5 задач с логичными зависимостями).
 3. `RawTask[]` сохраняется в `task_store.py` как текущее состояние проекта.
 4. `scheduler.py` строит DAG по `predecessors`, проверяет циклы (при цикле — `CyclicDependencyError` → `HTTPException 400`), выполняет топологическую сортировку и вычисляет `start_date`/`end_date`: задача без предшественников стартует от базовой даты проекта; задача с предшественниками — со дня, следующего за максимальным `end_date` предшественников; `end_date = start_date + duration_days - 1`.
 5. FastAPI сериализует `GanttTask[]` в camelCase JSON.
@@ -178,52 +192,71 @@ Seed-данные ──> GET /api/tasks ──> seed.py ───────�
 User Chat (ChatPanel.tsx)
         │  POST /api/chat { message, история }
         ▼
-FastAPI routers/chat.py ──> llm_client.py ──> OpenRouter API (LLM)
-                                                    │
-                                    LLM Tool Call (MCP-инструмент:
-                              update_task_details / add_new_task / delete_tasks)
-                                                    │
-                                                    ▼
-                                 mcp_server.py: Task Mutation
-                              (мутация RawTask[] из task_store.py)
-                                                    │
-                                                    ▼
-                                    scheduler.py (DAG Scheduler)
-                              (полный пересчёт дат, проверка циклов)
-                                                    │
-                                                    ▼
-                                              GanttTask[]
-                                                    │
-                        ┌───────────────────────────┤
-                        ▼                           ▼
-        результат tool call -> LLM          camelCase JSON -> frontend
-        (LLM формирует текстовый ответ)             │
-                                                    ▼
-                                  Zod parse -> useTasks -> UI re-render
+FastAPI routers/chat.py ──> request_parser.py (анализ запроса, шаблоны tool_calls)
+        │
+        ▼
+llm_client.py ──> OpenRouter API / Google Gemini / AsyncOpenAI
+        │
+        ▼
+LLM Tool Call (MCP-инструмент:
+  update_task_details / add_new_task / delete_tasks /
+  set_project_start_date / clear_all_tasks / get_excel_template)
+        │
+        ▼
+mcp_server.py: execute_tool_call() — диспетчер с валидацией аргументов
+(камелCase → snake_case, приведение типов, Pydantic-валидация)
+        │
+        ▼
+agent_loop.py: run_tool_calling_loop()
+(многораундовый цикл, защита от зацикливания, Post-Tool grounding)
+        │
+        ▼
+mcp_server.py: инструмент мутирует RawTask[] из task_store.py
+        │
+        ▼
+scheduler.py (DAG Scheduler)
+(полный пересчёт дат, проверка циклов)
+        │
+        ▼
+GanttTask[]
+        │
+        ▼
+grounding.py: grounding_check() — Post-Reply проверка дат в ответе LLM
+        │
+        ▼
+camelCase JSON -> frontend
+        │
+        ▼
+Zod parse -> useTasks -> UI re-render
 ```
 
 Шаги:
 1. Пользователь пишет запрос в чат («увеличь длительность задачи X до 7 дней»).
-2. `routers/chat.py` через `llm_client.py` отправляет в OpenRouter сообщение пользователя, историю и JSON Schema MCP-инструментов.
-3. LLM возвращает tool call; backend исполняет соответствующий MCP-инструмент.
-4. Инструмент мутирует `RawTask[]` (никогда не трогает даты напрямую) и вызывает `scheduler.py` для полного пересчёта.
-5. Результат (`GanttTask[]`) возвращается LLM для формирования текстового ответа и — вместе с текстом ответа — фронтенду.
-6. Фронтенд валидирует `GanttTask[]` через Zod и перерисовывает диаграмму. Ошибки (цикл, неизвестный id, ZodError) показываются как Toast.
+2. `routers/chat.py` через `request_parser.py` предварительно анализирует запрос и генерирует шаблоны tool calls для помощи LLM.
+3. `routers/chat.py` через `llm_client.py` отправляет в LLM сообщение пользователя, историю и JSON Schema MCP-инструментов.
+4. LLM возвращает tool call (или текст с XML/JSON — перехватывается валидационным слоем `agent_loop.py`); `mcp_server.py` диспетчеризует вызов через `execute_tool_call()`.
+5. Инструмент мутирует `RawTask[]` (никогда не трогает даты напрямую) и вызывает `scheduler.py` для полного пересчёта.
+6. `agent_loop.py` выполняет Post-Tool grounding: сравнивает запрошенные пользователем даты с фактическими датами задач и при конфликте инъецирует пояснение в контекст LLM.
+7. Результат (`GanttTask[]`) возвращается LLM для формирования текстового ответа и — вместе с текстом ответа — фронтенду.
+8. `grounding_check()` выполняет Post-Reply grounding: сверяет даты в текстовом ответе LLM с актуальными датами задач; при обнаружении галлюцинированных дат добавляет поправку в ответ.
+9. Фронтенд валидирует `GanttTask[]` через Zod и перерисовывает диаграмму. Ошибки (цикл, неизвестный id, ZodError) показываются как Toast.
 
 Инварианты потоков (из `system.md`):
 - Даты вычисляются ТОЛЬКО в `scheduler.py`; фронтенд и LLM-промпты никогда не считают `startDate`/`endDate`.
 - Любая мутация проходит полный цикл: `RawTask[] -> scheduler -> GanttTask[]`.
 - Каждая мутация зависимостей/длительности сопровождается проверкой цикличности; при цикле — `CyclicDependencyError`, мутация откатывается, состояние остаётся консистентным.
+- Защита от зацикливания: `agent_loop.py` отслеживает уникальные сигнатуры вызовов инструментов и прерывает цикл при обнаружении повтора (максимум 5 раундов).
 
 ---
 
-## 4. Спецификация MCP-инструментов (FastMCP)
+## 4. Спецификация MCP-инструментов (mcp_server.py)
 
 Общие правила для всех инструментов (`backend/app/mcp_server.py`):
 - Инструменты **агностичны к UI**: не знают о React, не форматируют текст для пользователя.
 - Каждый инструмент: читает текущее `RawTask[]` из `task_store.py` → применяет мутацию → вызывает `scheduler.py` → возвращает отвалидированный `GanttTask[]` (сериализация через Pydantic).
 - Все параметры инструментов описаны через Pydantic `Field(description=...)` на русском языке с примером — эти описания попадают в JSON Schema инструментов для LLM.
 - При ошибке (неизвестный `id`, цикл зависимостей, невалидные данные) инструмент возвращает структурированную ошибку `{ "error": "<человекочитаемое описание>" }`, мутация не применяется (состояние `task_store` откатывается к исходному).
+- Диспетчер `execute_tool_call()` выполняет маппинг camelCase → snake_case, приведение типов и Pydantic-валидацию перед вызовом реализации.
 
 ### 4.1. `update_task_details`
 
@@ -239,7 +272,8 @@ update_task_details(
     assignee: str | None = None,       # Новый исполнитель. Пример: "Дмитрий Пан"
     duration_days: int | None = None,  # Новая длительность в рабочих днях (>= 1). Пример: 7
     predecessors: list[str] | None = None  # Новый ПОЛНЫЙ список ID предшественников (замена, не добавление). Пример: ["task-1"]
-) -> list[GanttTask]
+    preferred_start_date: str | None = None  # Желаемая дата начала (YYYY-MM-DD). Пример: "2026-09-04"
+) -> list[GanttTask] | { "error": str }
 ```
 
 Поведение:
@@ -247,8 +281,9 @@ update_task_details(
 2. Применить только переданные (не-`None`) поля; `None` означает «поле не менять».
 3. `predecessors` заменяется целиком: LLM обязана передавать полный итоговый список.
 4. Проверить, что все `id` в `predecessors` существуют и не ссылаются на саму задачу.
-5. Вызвать `scheduler.py`: проверка циклов (`CyclicDependencyError` → ошибка, откат мутации) и полный пересчёт дат.
-6. Вернуть полный обновлённый `GanttTask[]` (все задачи проекта, т.к. изменение одной задачи может сдвинуть даты остальных).
+5. `preferred_start_date` сохраняется даже при наличии предшественников — планировщик учитывает его как ограничение снизу (max constraint).
+6. Вызвать `scheduler.py`: проверка циклов (`CyclicDependencyError` → ошибка, откат мутации) и полный пересчёт дат.
+7. Вернуть полный обновлённый `GanttTask[]` (все задачи проекта, т.к. изменение одной задачи может сдвинуть даты остальных).
 
 Выход: `list[GanttTask]` — полный список задач с пересчитанными `start_date`/`end_date`, либо `{ "error": ... }`.
 
@@ -264,16 +299,18 @@ add_new_task(
     description: str = "",             # Описание задачи. Пример: "Покрыть scheduler юнит-тестами"
     assignee: str = "",                # Исполнитель. Пример: "Дмитрий Пан"
     duration_days: int = 1,            # Длительность в рабочих днях (>= 1). Пример: 3
-    predecessors: list[str] = []       # Список ID задач-предшественников. Пример: ["task-2", "task-4"]
-) -> list[GanttTask]
+    predecessors: list[str] = [],      # Список ID задач-предшественников. Пример: ["task-2", "task-4"]
+    preferred_start_date: str | None = None  # Желаемая дата начала (YYYY-MM-DD). Пример: "2026-09-04"
+) -> list[GanttTask] | { "error": str }
 ```
 
 Поведение:
 1. Сгенерировать уникальный `id` для новой задачи на бэкенде (LLM `id` не передаёт и не придумывает).
 2. Проверить `duration_days >= 1`; иначе — ошибка валидации.
 3. Проверить, что все `id` из `predecessors` существуют; если нет — ошибка `"Предшественник с id '...' не найден"`, задача не добавляется.
-4. Добавить `RawTask` в `task_store`, вызвать `scheduler.py` (проверка циклов + пересчёт дат).
-5. Вернуть полный обновлённый `GanttTask[]`, включающий новую задачу с рассчитанными датами.
+4. `preferred_start_date` сохраняется даже при наличии предшественников — планировщик учитывает его как ограничение снизу.
+5. Добавить `RawTask` в `task_store`, вызвать `scheduler.py` (проверка циклов + пересчёт дат).
+6. Вернуть полный обновлённый `GanttTask[]`, включающий новую задачу с рассчитанными датами.
 
 Выход: `list[GanttTask]` — полный список задач, либо `{ "error": ... }`.
 
@@ -286,28 +323,79 @@ add_new_task(
 ```
 delete_tasks(
     task_ids: list[str]                # Обязательный. Список ID удаляемых задач. Пример: ["task-5", "task-6"]
-) -> list[GanttTask]
+) -> list[GanttTask] | { "error": str }
 ```
 
 Поведение:
-1. Проверить, что все `task_ids` существуют; если какой-то не найден — ошибка `"Задача с id '...' не найдена"`, ничего не удаляется (операция атомарна).
-2. Удалить задачи из `task_store`.
-3. У всех оставшихся задач вычистить удалённые `id` из `predecessors` (осиротевшие ссылки недопустимы).
-4. Вызвать `scheduler.py` для полного пересчёта дат оставшихся задач.
-5. Вернуть полный обновлённый `GanttTask[]` (может быть пустым списком, если удалены все задачи).
+1. Если ни один из `task_ids` не найден в проекте — возвращается актуальный граф без ошибки (идемпотентность).
+2. Если часть `task_ids` не найдена — удаляются только существующие задачи, не существующие игнорируются.
+3. Удалить задачи из `task_store`.
+4. У всех оставшихся задач вычистить удалённые `id` из `predecessors` (осиротевшие ссылки недопустимы).
+5. Вызвать `scheduler.py` для полного пересчёта дат оставшихся задач.
+6. Вернуть полный обновлённый `GanttTask[]` (может быть пустым списком, если удалены все задачи).
 
 Выход: `list[GanttTask]` — полный список оставшихся задач, либо `{ "error": ... }`.
 
-### 4.4. Сводная таблица инструментов
+### 4.4. `set_project_start_date`
+
+Назначение: сдвинуть базовую дату старта всего проекта и пересчитать все задачи.
+
+Сигнатура:
+
+```
+set_project_start_date(
+    project_start_date: str            # Обязательный. ISO YYYY-MM-DD. Пример: "2026-08-01"
+) -> list[GanttTask] | { "error": str }
+```
+
+Поведение:
+1. Валидировать формат даты (YYYY-MM-DD); при невалидном формате — ошибка.
+2. Обновить `project_start_date` в `TaskStore`.
+3. Вызвать `scheduler.py` для полного пересчёта дат всех задач.
+4. Вернуть полный обновлённый `GanttTask[]`.
+
+> ⚠️ Этот инструмент **строго запрещён** для сдвига отдельных задач. Используйте `duration_days` и `predecessors`. Инструмент вызывается **только** при явном запросе сдвинуть старт *всего проекта*.
+
+### 4.5. `clear_all_tasks`
+
+Назначение: полностью очистить таблицу задач.
+
+Сигнатура:
+
+```
+clear_all_tasks() -> list[GanttTask] | { "error": str }
+```
+
+Поведение:
+1. Очистить `task_store` (удалить все задачи).
+2. Вернуть пустой список `[]`.
+
+### 4.6. `get_excel_template`
+
+Назначение: получить эталонный Excel-шаблон для заполнения проекта (5 колонок).
+
+Сигнатура:
+
+```
+get_excel_template() -> { "template": str (base64), "filename": str, "mime_type": str } | { "error": str }
+```
+
+Поведение:
+1. Сформировать `.xlsx` файл с 5 колонками: Задача, Описание, Исполнитель, Длительность (дни), Предшественники.
+2. БЕЗ колонок ID, Дата начала, Дата окончания (даты рассчитает бэкенд при импорте).
+3. 5 демо-строк с наглядными примерами заполнения. Предшественники указываются как номера строк (1, 2, 3, 4), НЕ task-N.
+4. Вернуть base64-кодированное содержимое файла.
+
+### 4.7. Сводная таблица инструментов
 
 | Инструмент | Входные параметры | Выход | Ключевые ошибки |
 |---|---|---|---|
-| `update_task_details` | `task_id` (обяз.), `title?`, `description?`, `assignee?`, `duration_days?`, `predecessors?` | `list[GanttTask]` (все задачи) | задача не найдена; предшественник не найден; ссылка на себя; `CyclicDependencyError`; `duration_days < 1` |
-| `add_new_task` | `title` (обяз.), `description?`, `assignee?`, `duration_days?`, `predecessors?` | `list[GanttTask]` (все задачи, включая новую) | предшественник не найден; `CyclicDependencyError`; `duration_days < 1` |
-| `delete_tasks` | `task_ids` (обяз., непустой список) | `list[GanttTask]` (оставшиеся задачи) | задача не найдена (атомарный отказ); пустой `task_ids` |
+| `update_task_details` | `task_id` (обяз.), `title?`, `description?`, `assignee?`, `duration_days?`, `predecessors?`, `preferred_start_date?` | `list[GanttTask]` (все задачи) | задача не найдена; предшественник не найден; ссылка на себя; `CyclicDependencyError`; `duration_days < 1` |
+| `add_new_task` | `title` (обяз.), `description?`, `assignee?`, `duration_days?`, `predecessors?`, `preferred_start_date?` | `list[GanttTask]` (все задачи, включая новую) | предшественник не найден; `CyclicDependencyError`; `duration_days < 1` |
+| `delete_tasks` | `task_ids` (обяз., непустой список) | `list[GanttTask]` (оставшиеся задачи) | задача не найдена (идемпотентный пропуск); пустой `task_ids` |
 | `set_project_start_date` | `project_start_date` (обяз., ISO `YYYY-MM-DD`) | `list[GanttTask]` (все задачи) | неверный формат даты; `CyclicDependencyError` |
-
-> ⚠️ `set_project_start_date` **строго запрещён** для сдвига отдельных задач. Используйте `duration_days` и `predecessors`. Инструмент вызывается **только** при явном запросе сдвинуть старт *всего проекта*.
+| `clear_all_tasks` | (нет параметров) | `list[GanttTask]` (пустой `[]`) | — |
+| `get_excel_template` | (нет параметров) | `{ template: base64, filename, mime_type }` | ошибка генерации шаблона |
 
 ---
 
@@ -315,8 +403,69 @@ delete_tasks(
 
 | № | Инвариант | Как закреплён в архитектуре |
 |---|---|---|
-| 1 | Единый источник расчёта дат | Только `backend/app/services/scheduler.py` вычисляет `start_date`/`end_date`; фронтенд (`utils/dates.ts`) лишь форматирует ISO-даты; MCP-инструменты мутируют только `RawTask`-поля |
+| 1 | Единый источник расчёта дат | Только `backend/app/services/scheduler.py` вычисляет `start_date`/`end_date`; MCP-инструменты мутируют только `RawTask`-поля; `preferred_start_date` учитывается как ограничение снизу |
 | 2 | Зеркалирование контрактов | Раздел 2: таблицы полей + правило одновременного изменения `frontend/src/schemas/task.ts` и `backend/app/schemas/task.py`, alias-маппинг camelCase ↔ snake_case |
-| 3 | Строгая валидация и обработка ошибок | Раздел 2.4: `GanttTaskSchema.array().parse()` в try-catch + Toast; Pydantic + `HTTPException` на бэке |
+| 3 | Строгая валидация и обработка ошибок | Раздел 2.4: `GanttTaskSchema.array().parse()` в try-catch + Toast; Pydantic + `HTTPException` на бэке; диспетчер `mcp_server.py` валидирует аргументы через Pydantic |
 | 4 | MCP-изоляция | Раздел 4: инструменты агностичны к UI, паттерн `RawTask[] + мутация -> scheduler -> GanttTask[]` |
 | 5 | Отсутствие заглушек | Документ полный, без TODO и сокращений; это же требование распространяется на весь будущий код |
+| 6 | Мультипровайдерность LLM | `llm_client.py` поддерживает Gemini (через `google-genai` SDK) и OpenAI-совместимые API (через `AsyncOpenAI`); автоопределение по имени модели |
+| 7 | Защита от зацикливания | `agent_loop.py` отслеживает уникальные сигнатуры вызовов инструментов; при обнаружении повтора — прерывание цикла (максимум 5 раундов) |
+| 8 | Grounding проверок | `grounding.py` выполняет Post-Tool проверку (конфликты дат) и Post-Reply grounding (галлюцинации дат в ответе LLM) |
+
+---
+
+## 6. Тестирование
+
+### 6.1. Snapshot-тесты (pytest)
+
+Проект использует **data-driven snapshot-тестирование** на базе `pytest`. Тесты воспроизводят реальные диалоги с AI-ассистентом из логов `backend/logs/` и проверяют корректность результатов (генерация ответа и обновление табличного состояния).
+
+**Структура тестов:**
+
+```
+backend/
+└── tests/
+    ├── test_agent_evals.py       # Основной файл тестов
+    ├── eval_cases/               # Снэпшоты реальных диалогов (JSON)
+    │   ├── 11-36-07_update_task_details.json
+    │   ├── 11-38-08_add_new_task.json
+    │   └── ...
+    └── result/
+        ├── test.md               # Отчёт о результатах тестов
+        └── test2.md
+```
+
+**Как работает тест:**
+1. Тест загружает все `.json`-файлы из `backend/tests/eval_cases/`.
+2. Для каждого файла восстанавливает состояние `TaskStore` из `tasks_before`.
+3. Вызывает `execute_tool_call()` для каждого `tool_call` из лога.
+4. Сравнивает итоговое состояние `TaskStore` с `tasks_after` (количество задач, ID, поля) и подсвечивает расхождения.
+
+**Запуск:**
+```bash
+cd backend
+python -m pytest tests/test_agent_evals.py -v
+```
+
+**Как добавить новый Eval-кейс:**
+1. Открой папку логов за нужную дату: `backend/logs/YYYY-MM-DD/`.
+2. Найди JSON-файл нужного вызова (например, `12-20-51_update_task_details.json`).
+3. Скопируй его в `backend/tests/eval_cases/`:
+   ```bash
+   # Windows
+   Copy-Item backend\logs\2026-08-03\12-20-51_update_task_details.json backend\tests\eval_cases\
+   # Linux / macOS
+   cp backend/logs/2026-08-03/12-20-51_update_task_details.json backend/tests/eval_cases/
+   ```
+4. Запусти `pytest` — тесты автоматически пройдутся по всем `.json` в папке и подсветят расхождения в генерации или обновлении табличного состояния.
+
+### 6.2. Валидация на границах (runtime)
+
+Помимо snapshot-тестов, валидация выполняется в рантайме:
+- **Фронтенд:** каждый ответ API/LLM прогоняется через `GanttTaskSchema.array().parse()` в try-catch. При `ZodError` UI не падает — показывается Toast.
+- **Бэкенд:** входящие данные валидируются Pydantic; ошибки бизнес-логики (цикл в графе, неизвестный `id`) возвращаются как `HTTPException` с кодами 400/404/422.
+- **MCP-диспетчер:** аргументы инструментов валидируются через Pydantic-схемы (`_normalize_arguments`) перед выполнением.
+
+### 6.3. Тестирование фронтенда
+
+На данный момент фронтенд не имеет unit-тестов. UI-валидация выполняется вручную через dev-сервер (`npm run dev`) и через интеграцию с бэкендом.
