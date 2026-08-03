@@ -94,9 +94,10 @@ bal.py
 promt/
 
  — копия.env
-*.json
 .env-gemini
 .env-openrouter
 .env-groq
 backend/tests/result/
 video.md
+backend/tests/
+backend/data/
