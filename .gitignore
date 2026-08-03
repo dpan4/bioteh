@@ -86,13 +86,17 @@ $RECYCLE.BIN/
 .AppleDouble
 .LSOverride
 .kilo/
+# ==========================================
+# 6. Пользовательские
+# ==========================================
 tz.md
 bal.py
 promt/
-google.py
+
  — копия.env
 *.json
 .env-gemini
 .env-openrouter
 .env-groq
 backend/tests/result/
+video.md
