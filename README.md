@@ -2,11 +2,122 @@
 
 **Интерактивное управление проектами с AI-ассистентом и DAG-планировщиком.** Загрузка диаграммы Гантта из Excel, автоматический расчёт дат с учётом зависимостей, диалоговое управление задачами через чат с LLM — и всё это без единой ручной перестановки сроков.
 
-**Видео сценария**
-https://disk.yandex.ru/i/AsEvSboROBu3pg
+📹 **[Видео демонстрации](https://disk.yandex.ru/i/AsEvSboROBu3pg)**  
+📄 **[Шаблон Excel для теста](https://disk.yandex.ru/i/TlFhLjbIYbnyLw)** (можно скачать прямо из дашборда)
 
-**Шаблон excel для теста**
-Можно скачать праямо из дашборда. Либо https://disk.yandex.ru/i/TlFhLjbIYbnyLw
+---
+
+## 🚀 Быстрый старт
+
+### Вариант 1: Docker Compose (Рекомендуется) 🐋
+
+**Требования:** Docker и Docker Compose установлены
+
+```bash
+# 1. Клонирование репозитория
+git clone https://github.com/dpan4/bioteh
+cd bioteh
+
+# 2. Создание файла с переменными окружения
+# Windows (PowerShell):
+New-Item -ItemType File -Path backend\.env
+notepad backend\.env
+
+# Linux / macOS:
+nano backend/.env
+```
+
+**Содержимое `backend/.env`** (вставьте один из вариантов):
+
+```bash
+# === OpenRouter (рекомендуется для тестирования) ===
+LLM_API_KEY=sk-or-v1-ваш-ключ
+LLM_MODEL=deepseek/deepseek-chat
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_TEMPERATURE=0.1
+
+# === Или Google Gemini (бесплатный tier) ===
+# LLM_MODEL=gemini-2.0-flash-exp
+# GEMINI_API_KEY=your-gemini-api-key-here
+# Получить ключ: https://aistudio.google.com/apikey
+
+# === Или OpenAI ===
+# LLM_API_KEY=sk-ваш-ключ
+# LLM_MODEL=gpt-4o-mini
+# LLM_BASE_URL=https://api.openai.com/v1
+```
+
+```bash
+# 3. Запуск Docker Compose
+docker-compose up --build -d
+
+# 4. Проверка статуса (дать 30-40 секунд на сборку)
+docker ps
+```
+
+**После запуска откройте:**
+- 🖥️ **Интерфейс:** http://localhost:3000
+- 🔧 **Backend API:** http://localhost:8000
+- 📚 **Swagger документация:** http://localhost:8000/docs
+
+---
+
+### Вариант 2: Локальный запуск (Без Docker) 💻
+
+**Требования:** Python 3.11+, Node.js 18+
+
+```bash
+# 1. Клонирование репозитория
+git clone https://github.com/dpan4/bioteh
+cd bioteh
+
+# 2. Установка зависимостей бэкенда
+cd backend
+pip install -r requirements.txt
+# Или вручную:
+# pip install fastapi uvicorn pydantic openai openpyxl python-dotenv google-genai python-multipart
+
+# 3. Создание файла .env (см. пример выше в Docker-варианте)
+# Windows:
+notepad .env
+# Linux / macOS:
+nano .env
+
+# 4. Установка зависимостей фронтенда
+cd ../frontend
+npm install
+
+# 5. Запуск бэкенда (терминал 1)
+cd ../backend
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# 6. Запуск фронтенда (терминал 2)
+cd ../frontend
+npm run dev
+```
+
+**После запуска откройте:**
+- 🖥️ **Интерфейс:** http://localhost:5173
+- 🔧 **Backend API:** http://localhost:8000
+- 📚 **Swagger документация:** http://localhost:8000/docs
+
+---
+
+### ✅ Первые шаги после запуска
+
+1. **Загрузите Excel-файл** — кнопка «Загрузить Excel» → выберите `.xlsx` с задачами  
+   Поддерживаются колонки: `Задача`, `Описание`, `Исполнитель`, `Длительность (дни)`, `Предшественники`
+
+2. **Поговорите с AI** — в чате справа напишите:
+   ```
+   Увеличь длительность задачи task-3 до 10 дней
+   Добавь задачу "Код-ревью" после Разработки API
+   Сдвинь проект так, чтобы он начинался 15 августа
+   ```
+
+3. **Отмена действий** — кнопки **Undo/Redo** в шапке или **Ctrl+Z** / **Ctrl+Y**
+
+4. **Скачайте расписание** — кнопка «Скачать Excel» для экспорта с рассчитанными датами
 
 ---
 
@@ -108,149 +219,45 @@ else:
 
 ---
 
-## Быстрый старт
+## 📚 Документация
 
-### 🐋 Вариант 1: Запуск через Docker Compose (Рекомендуется)
+- **[architecture.md](architecture.md)** — полная спецификация архитектуры, контракты данных, MCP-инструменты
+- **[ROADMAP.md](ROADMAP.md)** — технические долги и план движения к production
+- **[system.md](system.md)** — инварианты проекта и протокол AI-кодинга
 
-1. Клонирование репозитория и переход в проект
-
-```bash
-git clone https://github.com/dpan4/bioteh
-cd bioteh
-```
-2. Настройка окружения (Переменные среды)
-```bash
-nano backend/.env
-```
-В открывшийся редактор вставляй свои настройки (переместись стрелочками, вставь текст). Пример для OpenRouter:
-
-```bash
-LLM_API_KEY=sk-or-v1-твой-ключ
-LLM_MODEL=deepseek/deepseek-chat
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_TEMPERATURE=0.1
-```
-Нажми Ctrl+O, затем Enter (для сохранения) и Ctrl+X (для выхода из редактора nano).
-
-3. Запуск Докера 🐋
-Возвращаемся в корень проекта (где лежит наш docker-compose.yml) и поднимаем всю систему одной командой в фоне
-
-```bash
-docker-compose up --build -d
-```
-4. Проверка статуса
-Дай докеру секунд 30-40, чтобы он скачал образы Node.js и Python, скомпилировал фронт и запустил Uvicorn. После этого проверяй:
-
-```bash
-docker ps
-```
-
-Если в списке висят два запущенных контейнера (один на порту 3000, второй на 8000) - система запущена. 
-
-После завершения сборки и запуска контейнеров:
-
-- **Интерфейс (Frontend):** http://localhost:3000
-- **Бэкенд API (Backend):** http://localhost:8000
-- **Интерактивная документация API (Swagger):** http://localhost:8000/docs
-
-### 💻 Вариант 2: Локальный запуск (Без Docker)
-
-#### 1. Клонирование и зависимости
-
-```bash
-git clone https://github.com/dpan4/bioteh
-cd bioteh
-
-# Бэкенд
-cd backend
-pip install fastapi uvicorn pydantic openai openpyxl python-dotenv
-
-# Фронтенд
-cd ../frontend
-npm install
-```
-
-#### 2. Конфигурация — файл `.env`
-
-Создайте `backend/.env` с **одним** из вариантов ниже:
-
-```bash
-# === OpenRouter (рекомендуется) ===
-LLM_API_KEY=sk-or-v1-ваш-ключ
-LLM_MODEL=deepseek/deepseek-chat
-LLM_BASE_URL=https://openrouter.ai/api/v1
-
-# === Google Gemini ===
-# LLM_MODEL=gemini-2.0-flash-exp
-# GEMINI_API_KEY=your-gemini-api-key-here
-# Получить ключ: https://aistudio.google.com/apikey
-# Примечание: При использовании моделей gemini-* переменная GEMINI_API_KEY обязательна
-# Модель автоматически определяется по имени (содержит "gemini")
-
-# === OpenAI ===
-# LLM_API_KEY=sk-ваш-ключ
-# LLM_MODEL=gpt-4o-mini
-# LLM_BASE_URL=https://api.openai.com/v1
-
-# === DeepSeek ===
-# LLM_API_KEY=sk-ваш-ключ
-# LLM_MODEL=deepseek-chat
-# LLM_BASE_URL=https://api.deepseek.com/v1
-
-# === Ollama (локально) ===
-# LLM_API_KEY=ollama
-# LLM_MODEL=llama3.2
-# LLM_BASE_URL=http://localhost:11434/v1
-
-# Лимит токенов ответа (опционально, default 4096)
-LLM_MAX_TOKENS=4096
-
-# Temperature — степень креативности (опционально, default 0.7)
-# Для Tool Calling рекомендуется 0.0-0.3
-LLM_TEMPERATURE=0.1
-```
-
-> **Примечание:** 
-> - Для обратной совместимости поддерживаются переменные `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` и `OPENROUTER_BASE_URL`.
-> - При использовании Google Gemini (модели с "gemini" в имени) система автоматически переключается на официальный SDK `google-genai`. Требуется установка: `pip install google-genai`.
-> - Для Gemini поля `examples` автоматически удаляются из JSON-схем инструментов для совместимости с API.
-
-#### 3. Запуск
-
-**Терминал 1 — бэкенд (порт 8000):**
-```bash
-cd backend
-uvicorn app.main:app --app-dir . --reload --host 0.0.0.0 --port 8000
-```
-
-**Терминал 2 — фронтенд (порт 5173):**
-```bash
-cd frontend
-npm run dev
-```
-
-Откройте `http://localhost:5173`. Приложение загрузит seed-данные (5 задач с реалистичными зависимостями) и отобразит диаграмму Гантта.
-
-#### 4. Первые шаги
-
-- **Загрузите свой Excel** — нажмите «Загрузить Excel» и выберите `.xlsx`-файл с задачами. Поддерживаются русские и английские названия колонок: «Задача»/«Title», «Описание»/«Description», «Длительность»/«Duration_days», «Предшественники»/«Predecessors».
-- **Скачайте расписание** — нажмите «Скачать Excel» для экспорта текущего плана с датами.
-- **Поговорите с AI** — в поле чата справа напишите, например: «Увеличь длительность задачи task-3 до 10 дней» или «Добавь задачу Код-ревью после Разработки API». AI вызовет нужные инструменты и вернёт обновлённую диаграмму.
-- **Отмена и повтор действий** — используйте кнопки Undo/Redo в шапке приложения (или горячие клавиши **Ctrl+Z** / **Ctrl+Y**) для отмены неудачных действий AI или возврата к предыдущему состоянию. История хранит до 50 последних состояний проекта. Подробности в [UNDO_REDO_FEATURE.md](UNDO_REDO_FEATURE.md).
-
-### API (для справки)
+### API эндпоинты
 
 | Метод | Путь | Описание |
 |---|---|---|
-| `GET` | `/api/tasks` | Список всех задач с датами (seed при первом запросе) |
-| `POST` | `/api/tasks/upload` | Загрузка Excel-файла, замена проекта |
-| `GET` | `/api/tasks/export` | Скачать текущее расписание как `.xlsx` |
+| `GET` | `/api/tasks` | Список всех задач с датами |
+| `POST` | `/api/tasks/upload` | Загрузка Excel-файла |
+| `GET` | `/api/tasks/export` | Скачать расписание как `.xlsx` |
 | `POST` | `/api/chat` | Отправить сообщение AI-ассистенту |
 | `GET` | `/api/health` | Проверка доступности сервера |
 
 ---
 
-## Использование AI-ассистентов при разработке
+## 🧪 Тестирование
+
+### Запуск тестов
+
+```bash
+cd backend
+python -m pytest tests/test_agent_evals.py -v
+```
+
+### Ключевые тестовые сценарии
+
+1. **Генерация проекта с нуля** — LLM создает 6 задач с правильными зависимостями
+2. **Параллельные ветки** — разветвление графа с множественными предшественниками
+3. **Независимые задачи** — задачи без зависимостей с `preferred_start_date`
+4. **Реактивный пересчет** — изменение длительности автоматически сдвигает зависимые задачи
+
+Подробнее см. в разделе "Тестирование и Демонстрационные сценарии" ниже.
+
+---
+
+## 🏗️ Использование AI-ассистентов при разработке
 
 Этот проект разработан по методологии **Prompt-Driven Architecture** — архитектура, инварианты и контракты данных были спроектированы человеком, а реализация делегирована AI-агентам под строгим контролем этих инвариантов.
 
