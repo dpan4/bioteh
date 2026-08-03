@@ -117,52 +117,54 @@ export const GanttChart: FC<GanttChartProps> = ({ tasks, loading }) => {
   const todayOffset = daysBetween(timelineStart, new Date());
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", border: "1px solid #333", borderRadius: 8, overflow: "hidden", background: "#1a1a28" }}>
-      {/* Заголовок колонок */}
-      <div style={{ display: "flex", borderBottom: "1px solid #333", background: "#232336", fontSize: 12, fontWeight: 600, color: "#a0a0c0" }}>
-        <div style={{ width: SIDEBAR_WIDTH, flexShrink: 0, padding: "8px 12px", borderRight: "1px solid #333", display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 16 }}>&#9776;</span>
-          <span>Задача</span>
-        </div>
-        <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
-          <div style={{ display: "flex", height: 40, alignItems: "center", paddingLeft: TIMELINE_PADDING }}>
-            <div style={{ display: "flex", marginLeft: -DAY_WIDTH / 4 }}>
-              {timelineDates.map((d, i) => (
-                <div
-                  key={i}
-                  style={{
-                    width: DAY_WIDTH,
-                    textAlign: "center",
-                    flexShrink: 0,
-                    fontSize: 10,
-                    color: i % 7 < 5 ? "#808090" : "#555",
-                  }}
-                >
-                  {String(d.getDate()).padStart(2, "0")}.{String(d.getMonth() + 1).padStart(2, "0")}
-                </div>
-              ))}
-            </div>
-          </div>
-          {/* Линия сегодня */}
-          {todayOffset >= 0 && todayOffset <= totalDays && (
-            <div
-              style={{
-                position: "absolute",
-                top: 0,
-                bottom: 0,
-                left: todayOffset * DAY_WIDTH + DAY_WIDTH / 2 + TIMELINE_PADDING,
-                width: 2,
-                background: "#ef4444",
-                opacity: 0.6,
-                zIndex: 2,
-              }}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* Строки задач */}
+    <div style={{ display: "flex", flexDirection: "column", border: "1px solid #333", borderRadius: 8, background: "#1a1a28" }}>
+      {/* Скроллируемая область */}
       <div style={{ overflow: "auto", maxHeight: "calc(100vh - 300px)" }}>
+        <div style={{ minWidth: SIDEBAR_WIDTH + TIMELINE_PADDING + (totalDays + 1) * DAY_WIDTH }}>
+        {/* Заголовок колонок — sticky top */}
+        <div style={{ display: "flex", background: "#232336", fontSize: 12, fontWeight: 600, color: "#a0a0c0", position: "sticky", top: 0, zIndex: 10, borderBottom: "1px solid #333" }}>
+          <div style={{ width: SIDEBAR_WIDTH, flexShrink: 0, padding: "8px 12px", borderRight: "1px solid #333", display: "flex", alignItems: "center", gap: 8, position: "sticky", left: 0, zIndex: 11, background: "#232336" }}>
+            <span style={{ fontSize: 16 }}>&#9776;</span>
+            <span>Задача</span>
+          </div>
+          <div style={{ flex: 1, position: "relative" }}>
+            <div style={{ display: "flex", height: 40, alignItems: "center", paddingLeft: TIMELINE_PADDING }}>
+              <div style={{ display: "flex", marginLeft: -DAY_WIDTH / 4 }}>
+                {timelineDates.map((d, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      width: DAY_WIDTH,
+                      textAlign: "center",
+                      flexShrink: 0,
+                      fontSize: 10,
+                      color: i % 7 < 5 ? "#808090" : "#555",
+                    }}
+                  >
+                    {String(d.getDate()).padStart(2, "0")}.{String(d.getMonth() + 1).padStart(2, "0")}
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Линия сегодня */}
+            {todayOffset >= 0 && todayOffset <= totalDays && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: todayOffset * DAY_WIDTH + DAY_WIDTH / 2 + TIMELINE_PADDING,
+                  width: 2,
+                  background: "#ef4444",
+                  opacity: 0.6,
+                  zIndex: 2,
+                }}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Строки задач */}
         {tasks.map((task, taskIndex) => {
           const taskStart = parseDate(task.startDate);
           const taskEnd = parseDate(task.endDate);
@@ -180,7 +182,7 @@ export const GanttChart: FC<GanttChartProps> = ({ tasks, loading }) => {
                 minHeight: ROW_HEIGHT,
               }}
             >
-              {/* Боковая панель задачи */}
+              {/* Боковая панель задачи — sticky left */}
               <div
                 style={{
                   width: SIDEBAR_WIDTH,
@@ -193,13 +195,17 @@ export const GanttChart: FC<GanttChartProps> = ({ tasks, loading }) => {
                   gap: 2,
                   cursor: "pointer",
                   transition: "background 0.15s",
+                  position: "sticky",
+                  left: 0,
+                  zIndex: 5,
+                  background: taskIndex % 2 === 0 ? "#1e1e30" : "#1a1a28",
                 }}
                 onClick={() => setSelectedTask(task)}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.background = "#252540";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.background = taskIndex % 2 === 0 ? "#1e1e30" : "#1a1a28";
                 }}
                 title="Нажмите, чтобы открыть детали задачи"
               >
@@ -278,6 +284,7 @@ export const GanttChart: FC<GanttChartProps> = ({ tasks, loading }) => {
             </div>
           );
         })}
+        </div>
       </div>
 
       {/* Легенда */}
