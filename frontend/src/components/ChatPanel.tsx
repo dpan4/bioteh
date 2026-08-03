@@ -80,6 +80,7 @@ const styles = {
     padding: "10px 12px",
     borderTop: "1px solid #333",
     background: "#161622",
+    alignItems: "flex-end",
   },
   input: {
     flex: 1,
@@ -90,9 +91,11 @@ const styles = {
     color: "#e0e0f0",
     fontSize: 13,
     outline: "none",
-    resize: "none" as const,
+    resize: "vertical" as const,
     minHeight: 36,
-    maxHeight: 80,
+    maxHeight: 200,
+    lineHeight: "1.5",
+    overflowY: "auto" as const,
   },
   sendBtn: {
     padding: "8px 14px",
@@ -130,6 +133,13 @@ export const ChatPanel: FC<ChatPanelProps> = ({ onTaskUpdate, onError }) => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  }, [input]);
 
   const handleSend = async () => {
     const text = input.trim();
