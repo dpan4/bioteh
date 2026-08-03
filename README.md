@@ -122,6 +122,7 @@ nano backend/.env
 LLM_API_KEY=sk-or-v1-твой-ключ
 LLM_MODEL=deepseek/deepseek-chat
 LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_TEMPERATURE=0.1
 ```
 Нажми Ctrl+O, затем Enter (для сохранения) и Ctrl+X (для выхода из редактора nano).
 
