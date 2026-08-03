@@ -104,6 +104,7 @@ class TaskStore:
     def __init__(self) -> None:
         self._raw_tasks: list[RawTask] = []
         self._project_start_date: date = date.today()
+        self._was_cleared: bool = False
         self._load()
 
     # ── Персистентность ────────────────────────────────────────────────
@@ -137,8 +138,12 @@ class TaskStore:
     # ── Seed-данные ────────────────────────────────────────────────────
 
     def _ensure_seeded(self) -> None:
-        """Ленивая инициализация: если задач нет — заполняем seed-данными."""
-        if not self._raw_tasks:
+        """Ленивая инициализация: если задач нет — заполняем seed-данными.
+
+        Не выполняется после явного вызова clear(), чтобы очистка
+        сохраняла своё действие (tasks_after == []).
+        """
+        if not self._raw_tasks and not self._was_cleared:
             for task in _build_seed():
                 self._raw_tasks.append(task)
             self._save()
@@ -186,6 +191,7 @@ class TaskStore:
     def clear(self) -> None:
         """Полностью очищает хранилище задач и сохраняет пустое состояние на диск."""
         self._raw_tasks = []
+        self._was_cleared = True
         self._save()
 
     def save_to_file(self) -> None:
