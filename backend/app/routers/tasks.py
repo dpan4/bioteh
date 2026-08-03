@@ -72,7 +72,7 @@ def sync_tasks(raw_tasks: list[RawTask]) -> list[dict[str, object]]:
     try:
         if len(raw_tasks) == 0:
             # Явный сброс: очищаем хранилище без seed
-            store._raw_tasks = []
+            store.clear()
             return []
         gantt_tasks = store.set_raw_tasks(raw_tasks)
     except (CyclicDependencyError, ValueError) as exc:

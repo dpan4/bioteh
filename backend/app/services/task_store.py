@@ -4,14 +4,27 @@
 Даты вычисляются ТОЛЬКО через scheduler.py (system.md, инвариант 1);
 TaskStore — это хранилище состояния, а не логики расчёта.
 
+Данные персистятся в JSON-файл ``backend/data/tasks.json``.
+При старте загружаются из файла; при каждом изменении — сохраняются на диск.
+
 Содержит seed-данные (5 реалистичных задач с зависимостями) для старта
 приложения без загрузки Excel.
 """
 
+from __future__ import annotations
+
+import json
+import logging
 from datetime import date
+from pathlib import Path
 
 from app.schemas.task import GanttTask, RawTask
 from app.services.scheduler import CyclicDependencyError, calculate_schedule
+
+logger = logging.getLogger(__name__)
+
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+_DATA_FILE = _DATA_DIR / "tasks.json"
 
 
 def _build_seed() -> list[RawTask]:
@@ -75,10 +88,13 @@ def _build_seed() -> list[RawTask]:
 
 
 class TaskStore:
-    """In-memory хранилище задач с ленивой инициализацией seed-данных.
+    """In-memory хранилище задач с персистентностью в JSON-файл.
 
     Синглтон-экземпляр создаётся на уровне модуля (переменная ``store``),
     поэтому все компоненты приложения разделяют одно состояние.
+
+    Данные автоматически сохраняются в ``backend/data/tasks.json`` при каждом
+    изменении (set_raw_tasks, clear) и загружаются при старте.
 
     Attributes:
         _raw_tasks: Текущий список задач без дат.
@@ -88,12 +104,46 @@ class TaskStore:
     def __init__(self) -> None:
         self._raw_tasks: list[RawTask] = []
         self._project_start_date: date = date.today()
+        self._load()
+
+    # ── Персистентность ────────────────────────────────────────────────
+
+    def _save(self) -> None:
+        """Записывает текущий набор задач в JSON-файл на диске."""
+        try:
+            _DATA_DIR.mkdir(parents=True, exist_ok=True)
+            data = {
+                "tasks": [t.model_dump(by_alias=True, mode="json") for t in self._raw_tasks],
+                "project_start_date": self._project_start_date.isoformat(),
+            }
+            _DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            logger.exception("Не удалось сохранить TaskStore в файл %s", _DATA_FILE)
+
+    def _load(self) -> None:
+        """Загружает задачи из JSON-файла (если файл существует)."""
+        if not _DATA_FILE.is_file():
+            return
+        try:
+            data = json.loads(_DATA_FILE.read_text(encoding="utf-8"))
+            raw = data.get("tasks", [])
+            self._raw_tasks = [RawTask.model_validate(t) for t in raw]
+            if start := data.get("project_start_date"):
+                self._project_start_date = date.fromisoformat(start)
+            logger.info("TaskStore загружен из %s (%d задач)", _DATA_FILE, len(self._raw_tasks))
+        except Exception:
+            logger.exception("Не удалось загрузить TaskStore из %s", _DATA_FILE)
+
+    # ── Seed-данные ────────────────────────────────────────────────────
 
     def _ensure_seeded(self) -> None:
         """Ленивая инициализация: если задач нет — заполняем seed-данными."""
         if not self._raw_tasks:
             for task in _build_seed():
                 self._raw_tasks.append(task)
+            self._save()
+
+    # ── Публичный API ──────────────────────────────────────────────────
 
     def get_gantt_tasks(self) -> list[GanttTask]:
         """Возвращает список задач с датами, рассчитанными DAG Scheduler.
@@ -126,11 +176,17 @@ class TaskStore:
         """
         scheduled = calculate_schedule(tasks, self._project_start_date)
         self._raw_tasks = list(tasks)
+        self._save()
         return scheduled
 
     def get_raw_tasks(self) -> list[RawTask]:
         """Возвращает сырые задачи без дат (текущее состояние проекта)."""
         return list(self._raw_tasks)
+
+    def clear(self) -> None:
+        """Полностью очищает хранилище задач и сохраняет пустое состояние на диск."""
+        self._raw_tasks = []
+        self._save()
 
 
 # Синглтон-экземпляр: все модули бэкенда импортируют ``store`` из этого файла.

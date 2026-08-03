@@ -503,10 +503,7 @@ def execute_clear_all_tasks() -> dict[str, Any]:
     Returns:
         Словарь с ключом "tasks" (пустой список []).
     """
-    # Полностью затираем задачи в in-memory хранилище
-    store._raw_tasks = []
-    
-    # Возвращаем пустой массив задач в корректном формате
+    store.clear()
     return {"tasks": []}
 
 
@@ -532,31 +529,6 @@ def execute_get_excel_template() -> dict[str, Any]:
         }
     except Exception as exc:
         return {"error": f"Не удалось сформировать шаблон Excel: {exc}"}
-    try:
-        template_bytes = generate_template_excel()
-        template_b64 = base64.b64encode(template_bytes).decode("utf-8")
-        return {
-            "template": template_b64,
-            "filename": "gantt_template.xlsx",
-            "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        }
-    except Exception as exc:
-        return {"error": f"Не удалось сформировать шаблон Excel: {exc}"}
-
-
-def execute_clear_all_tasks() -> dict[str, Any]:
-    """Полностью очищает хранилище задач проекта, удаляя все записи.
-
-    Архитектура §4: инструмент UI-агностичен и возвращает пустой список задач.
-
-    Returns:
-        Словарь с ключом "tasks" (пустой список []).
-    """
-    # Полностью затираем задачи в in-memory хранилище
-    store._raw_tasks = []
-    
-    # Возвращаем пустой массив задач в корректном формате
-    return {"tasks": []}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
