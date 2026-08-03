@@ -188,6 +188,10 @@ class TaskStore:
         self._raw_tasks = []
         self._save()
 
+    def save_to_file(self) -> None:
+        """Публичный метод: принудительно сохраняет текущее состояние на диск."""
+        self._save()
+
 
 # Синглтон-экземпляр: все модули бэкенда импортируют ``store`` из этого файла.
 store = TaskStore()

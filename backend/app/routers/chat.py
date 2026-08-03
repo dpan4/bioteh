@@ -31,6 +31,7 @@ from app.services.agent_loop import (
 from app.services.grounding import grounding_check
 from app.services.llm_client import get_client
 from app.services.request_parser import analyze_request, parse_tool_calls
+from app.services.task_store import store
 from app.utils.logger import write_log
 
 logger = logging.getLogger(__name__)
@@ -173,13 +174,21 @@ async def chat(request: ChatRequest) -> ChatResponse:
     # --- 4. Tool Calling Loop: LLM -> инструменты -> ответ ---
     parsed_calls = parse_tool_calls(request.message, current_tasks)
 
+    # Транзакционность: сохраняем состояние ДО цикла для возможности отката
+    tasks_snapshot = store.get_raw_tasks()
+
     try:
         reply, tasks = await run_tool_calling_loop(
             messages, log_entry, current_tasks, parsed_calls,
             get_current_tasks=get_current_tasks,
             format_tool_result=format_tool_result,
         )
+        # Цикл завершился успешно — фиксируем изменения инструментов на диске
+        store.save_to_file()
     except Exception as exc:
+        # Откат: восстанавливаем состояние до вызова инструментов
+        store.set_raw_tasks(tasks_snapshot)
+        store.save_to_file()
         _raise_http(
             f"Ошибка при обращении к LLM или выполнении Tool Calling Loop: {exc}",
             502, log_entry, exc,
@@ -188,13 +197,16 @@ async def chat(request: ChatRequest) -> ChatResponse:
     # --- 5. Post-Tool grounding ---
     reply = grounding_check(reply, request.message, tasks)
 
+    # tasks_after читаем напрямую из store — гарантированно актуальное состояние
+    tasks_after = get_current_tasks()
+
     log_entry["reply"] = reply
-    log_entry["tasks_after"] = [_task_to_log_dict(t) for t in tasks]
+    log_entry["tasks_after"] = [_task_to_log_dict(t) for t in tasks_after]
     write_log(log_entry)
 
     # --- 6. Формирование и возврат ответа ---
     try:
-        return ChatResponse(reply=reply, tasks=tasks)
+        return ChatResponse(reply=reply, tasks=tasks_after)
     except Exception as exc:
         _raise_http(
             f"Ошибка при формировании ответа: {exc}", 500, log_entry, exc
