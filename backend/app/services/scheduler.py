@@ -17,6 +17,7 @@ from collections import defaultdict, deque
 from datetime import date, timedelta
 
 from app.schemas.task import GanttTask, RawTask
+from app.logger import logger as app_logger
 
 ISO_DATE_FMT = "%Y-%m-%d"
 
@@ -153,6 +154,11 @@ def calculate_schedule(
     if project_start_date is None:
         project_start_date = date.today()
 
+    app_logger.info(
+        "[📊 DAG ENGINE] Запущен расчет направленного ациклического графа (DAG) "
+        "и критического пути..."
+    )
+
     _validate_tasks(tasks)
 
     tasks_by_id: dict[str, RawTask] = {task.id: task for task in tasks}
@@ -196,6 +202,10 @@ def calculate_schedule(
     for task_id in topological_order:
         task = tasks_by_id[task_id]
         if task.predecessors:
+            app_logger.info(
+                "[📊 DAG ENGINE] Обнаружено ветвление графа. "
+                "Корректировка дат начала по максимальной дате окончания предков."
+            )
             # Начало задачи — день ПОСЛЕ окончания самого позднего предшественника.
             # end_date предшественника — последний день его работы, поэтому +1.
             predecessor_max_end = max(
@@ -243,5 +253,10 @@ def calculate_schedule(
                 end_date=end_date,
             )
         )
+
+    app_logger.info(
+        "[📊 DAG ENGINE] SUCCESS: Граф задач успешно валидирован. "
+        "Все даты зависимостей пересчитаны."
+    )
 
     return scheduled_tasks

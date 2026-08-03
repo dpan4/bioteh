@@ -26,6 +26,8 @@ from app.utils.parsers import (
     extract_tools_from_xml_or_text,
 )
 
+from app.logger import logger as app_logger
+
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_CALL_ROUNDS = 5
@@ -119,13 +121,13 @@ async def run_tool_calling_loop(
 
         # 1. Если LLM выдала XML/JSON текстом в reply вместо tool_calls
         if not tool_calls and ("<tool_call>" in reply or "```json" in reply):
-            logger.info("Validation Layer: перехват XML/JSON из текста reply")
+            app_logger.info("[🤖 AI AGENT] Validation Layer: перехват XML/JSON из текста reply")
             tool_calls = extract_tools_from_xml_or_text(reply)
             reply = ""  # очищаем reply, так как там лежал код вызова
 
         # 2. Если LLM ничего не вызвала, но у нас есть fallback из _parse_tool_calls
         if not tool_calls and parsed_calls and round_num == 0:
-            logger.info("Validation Layer: применен Regex Fallback из _parse_tool_calls")
+            app_logger.info("[🤖 AI AGENT] Validation Layer: применен Regex Fallback из _parse_tool_calls")
             tool_calls = parsed_calls
 
         # 3. Нормализация, очистка и строгое упорядочивание (Delete -> Add -> Update)
@@ -146,8 +148,8 @@ async def run_tool_calling_loop(
         )
 
         if current_signature in seen_signatures:
-            logger.warning(
-                f"Round {round_num + 1}: Зафиксирован повторный вызов тех же инструментов! "
+            app_logger.warning(
+                "[🔒 GUARD] Зафиксирован повторный вызов тех же инструментов! "
                 "Прерываем цикл для предотвращения дублирования данных."
             )
             # 🔥 КРИТИЧНО: Используем результат последнего tool call, а не перечитываем store
@@ -178,12 +180,13 @@ async def run_tool_calling_loop(
         messages.append(assistant_message)
 
         for tc in tool_calls:
-            logger.debug(
-                f"Выполнение инструмента: {tc['name']} с аргументами: {tc['arguments']}"
+            app_logger.info(
+                f"[🤖 AI AGENT] Инициализирован вызов инструмента [{tc['name']}] "
+                f"с аргументами: {tc['arguments']}"
             )
             try:
                 result = execute_tool_call(tc["name"], tc["arguments"])
-                logger.debug(f"Инструмент {tc['name']} выполнен успешно")
+                app_logger.info(f"[🤖 AI AGENT] Инструмент [{tc['name']}] выполнен успешно")
                 
                 # 🔥 КРИТИЧНО: Сохраняем результат последнего успешного tool call
                 # Пустой массив [] — это ВАЛИДНЫЙ результат (например, clear_all_tasks)
@@ -191,8 +194,8 @@ async def run_tool_calling_loop(
                     last_tool_result_tasks = result["tasks"]
                     
             except Exception as exc:
-                logger.error(
-                    f"Ошибка при выполнении инструмента {tc['name']}: {exc}",
+                app_logger.error(
+                    f"[🤖 AI AGENT] Ошибка при выполнении инструмента [{tc['name']}]: {exc}",
                     exc_info=True,
                 )
                 result = {
@@ -239,16 +242,17 @@ async def run_tool_calling_loop(
             user_message, list(tasks_before), tasks_after
         )
         if conflict_note:
-            logger.info(
-                "Post-Tool Check: обнаружен конфликт дат "
+            app_logger.info(
+                "[🤖 AI AGENT] Post-Tool Check: обнаружен конфликт дат "
                 "— инъекция уведомления в контекст LLM"
             )
             messages.append(
                 {"role": "system", "content": conflict_note}
             )
 
-    logger.warning(
-        f"Tool Calling Loop: достигнут лимит {MAX_TOOL_CALL_ROUNDS} итераций"
+    app_logger.warning(
+        "[🤖 AI AGENT] Достигнут лимит итераций обработки. "
+        "Пожалуйста, уточните запрос."
     )
     # 🔥 КРИТИЧНО: Используем результат последнего tool call вместо перечитывания store
     # Пустой массив [] — валидное состояние после clear_all_tasks
